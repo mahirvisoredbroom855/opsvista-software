@@ -2,7 +2,7 @@ from sqlalchemy import Column, String, Boolean, DateTime, Numeric, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from app.core.supbase_client import Base
+from app.core.supabase_client import Base
 import uuid
 
 class RawLocationFeed(Base):
