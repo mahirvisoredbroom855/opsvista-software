@@ -6,9 +6,9 @@ from uuid import UUID
 from enum import Enum
 import json
 import logging
-
-from backend.app.core.supabase_client import supabase
-from backend.app.features.task_assignment.models.task import (
+from app.core.supabase_client import supabase as service_supabase
+from app.core.supabase_client import supabase
+from app.features.task_assignment.models.task import (
     TaskCreate,
     TaskUpdate,
     TaskResponse,
@@ -35,7 +35,7 @@ class TaskService:
     @staticmethod
     def create_task(data: TaskCreate, assigner_id: UUID) -> TaskResponse:
         """Insert a new task. Only called by owner / admin / manager."""
-        from backend.app.core.supabase_client import service_supabase
+        from app.core.supabase_client import service_supabase
         
         def serialize(val):
             if isinstance(val, UUID):
@@ -75,8 +75,9 @@ class TaskService:
         print(f"🔍 BACKEND DEBUG - Assignee ID: {assignee_id}")
         
         # Use service client which bypasses RLS - temporary fix
-        from backend.app.core.supabase_client import service_supabase
+        from app.core.supabase_client import service_supabase
         
+        # First get the tasks
         resp = (
             service_supabase.table(TABLE)
             .select("*")
@@ -85,15 +86,34 @@ class TaskService:
             .execute()
         )
         print(f"🔍 BACKEND DEBUG - Service client returned {len(resp.data)} tasks")
-        print(f"🔍 BACKEND DEBUG - First task: {resp.data[0] if resp.data else 'None'}")
         
-        return [TaskResponse(**row) for row in resp.data]
+        tasks = []
+        for row in resp.data:
+            task_data = dict(row)
+            
+            # Get the assignee name separately
+            try:
+                user_resp = (
+                    service_supabase.table("users")
+                    .select("full_name")
+                    .eq("id", row["assignee_id"])
+                    .single()
+                    .execute()
+                )
+                task_data["assignee_name"] = user_resp.data.get("full_name", "Unknown User")
+            except Exception as e:
+                print(f"🔍 BACKEND DEBUG - Could not get user name: {e}")
+                task_data["assignee_name"] = "Unknown User"
+            
+            tasks.append(TaskResponse(**task_data))
+        
+        return tasks
 
         # ──────────────────────────── UPDATE ───────────────────────────── #
     @staticmethod
     def update_task(task_id: UUID, patch: TaskUpdate, user_id: UUID, role: str) -> TaskResponse:
         """Update task status or fields based on role."""
-        from backend.app.features.task_assignment.models.task import TaskStatus
+        from app.features.task_assignment.models.task import TaskStatus
 
         task_id_str = TaskService._serialize_uuid(task_id)
         user_id_str = TaskService._serialize_uuid(user_id)
@@ -104,7 +124,7 @@ class TaskService:
         print(f"🔍 UPDATE DEBUG - Patch data: {patch}")
 
         # Use service client to avoid RLS issues for now
-        from backend.app.core.supabase_client import service_supabase
+        from app.core.supabase_client import service_supabase
         
         current = (
             service_supabase.table(TABLE)
@@ -178,7 +198,7 @@ class TaskService:
     def get_metrics() -> dict:
         """Compute task KPIs."""
         # Use service client for admin operations
-        from backend.app.core.supabase_client import service_supabase
+        from app.core.supabase_client import service_supabase
         resp = service_supabase.table(TABLE).select("status, done_at, created_at").execute()
         # ... rest of your original code
 
@@ -206,6 +226,52 @@ class TaskService:
             "completion_rate": round(completed / total * 100, 1) if total else 0,
             "avg_completion_hours": round(avg_hours, 2),
         }
+    
+    # ──────────────────────────── DELETE ───────────────────────────── #
+    @staticmethod
+    def delete_task(task_id: UUID) -> bool:
+        print(f"🗑️ SERVICE - Attempting to delete task: {task_id}")
+
+        try:
+            from app.core.supabase_client import service_supabase
+
+            # Check existence
+            check = (
+                service_supabase
+                .table("tasks")
+                .select("*")
+                .eq("task_id", str(task_id))
+                .maybe_single()
+                .execute()
+            )
+            print("🕵️‍♂️ Task found before delete:", check.data)
+
+            if not check.data:
+                print("❌ Task not found — aborting delete.")
+                return False
+
+            # Proceed to delete
+            response = (
+                service_supabase
+                .table("tasks")
+                .delete()
+                .eq("task_id", str(task_id))
+                .execute()
+            )
+
+            print("📄 Supabase delete response:", response)
+            return bool(response.data)
+
+        except Exception as e:
+            print("❌ Delete failed with exception:", e)
+            return False
+
+
+
+
+
+
+
 
     # ──────────────────────────── CRON JOB ───────────────────────────── #
     @staticmethod
@@ -223,3 +289,45 @@ class TaskService:
             .execute()
         )
         return resp.count or 0
+    
+
+
+    @staticmethod
+    def list_all_tasks() -> List[TaskResponse]:
+        """Return all tasks for managers, ordered by due_date."""
+        print(f"🔍 BACKEND DEBUG - Fetching all tasks for manager")
+        
+        # Use service client which bypasses RLS
+        from app.core.supabase_client import service_supabase
+        
+        # Get all tasks
+        resp = (
+            service_supabase.table(TABLE)
+            .select("*")
+            .order("due_date")
+            .execute()
+        )
+        print(f"🔍 BACKEND DEBUG - Service client returned {len(resp.data)} total tasks")
+        
+        tasks = []
+        for row in resp.data:
+            task_data = dict(row)
+            
+            # Get the assignee name separately
+            try:
+                user_resp = (
+                    service_supabase.table("users")
+                    .select("full_name")
+                    .eq("id", row["assignee_id"])
+                    .single()
+                    .execute()
+                )
+                task_data["assignee_name"] = user_resp.data.get("full_name", "Unknown User")
+            except Exception as e:
+                print(f"🔍 BACKEND DEBUG - Could not get user name: {e}")
+                task_data["assignee_name"] = "Unknown User"
+            
+            tasks.append(TaskResponse(**task_data))
+        
+        return tasks
+

@@ -1,68 +1,415 @@
+/* index.css - OpsVista Global Styles */
+
+/* Import premium fonts */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* CSS Custom Properties */
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
+  /* OpsVista Brand Colors */
+  --opsvista-orange: #FF8C42;
+  --opsvista-dark: #1A1A1A;
+  --opsvista-darker: #0D0D0D;
+  --opsvista-light: #F5F5F5;
+  --opsvista-accent: #FFB088;
+  --opsvista-glow: rgba(255, 140, 66, 0.5);
+  
+  /* Gradients */
+  --gradient-primary: linear-gradient(135deg, #FF8C42 0%, #FFB088 100%);
+  --gradient-dark: linear-gradient(135deg, #0D0D0D 0%, #1A1A1A 50%, #2D2D2D 100%);
+  --gradient-mesh: 
+    radial-gradient(at 40% 20%, rgba(255, 140, 66, 0.3) 0px, transparent 50%),
+    radial-gradient(at 80% 0%, rgba(255, 176, 136, 0.2) 0px, transparent 50%),
+    radial-gradient(at 0% 50%, rgba(255, 140, 66, 0.2) 0px, transparent 50%),
+    radial-gradient(at 80% 50%, rgba(26, 26, 26, 0.3) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, rgba(255, 176, 136, 0.2) 0px, transparent 50%);
+  
+  /* Typography */
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.6;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
+  
+  /* Color Scheme */
+  color-scheme: dark;
+  color: rgba(255, 255, 255, 0.95);
+  background-color: var(--opsvista-darker);
+  
+  /* Rendering Optimization */
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+/* Global Reset and Box Model */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
+/* Selection Styling */
+::selection {
+  background-color: var(--opsvista-orange);
+  color: white;
+}
+
+::-moz-selection {
+  background-color: var(--opsvista-orange);
+  color: white;
+}
+
+/* Body Styling with Animated Background */
 body {
   margin: 0;
   display: flex;
   place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--gradient-dark);
+  position: relative;
+  overflow-x: hidden;
 }
 
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: var(--gradient-mesh);
+  animation: meshAnimation 20s ease infinite;
+  z-index: -1;
+}
+
+@keyframes meshAnimation {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  33% { transform: rotate(120deg) scale(1.1); }
+  66% { transform: rotate(240deg) scale(0.9); }
+}
+
+/* Animated Grid Background */
+body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    linear-gradient(rgba(255, 140, 66, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 140, 66, 0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+  animation: gridMove 10s linear infinite;
+  z-index: -1;
+}
+
+@keyframes gridMove {
+  0% { transform: translate(0, 0); }
+  100% { transform: translate(50px, 50px); }
+}
+
+/* Typography Hierarchy */
 h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+  font-family: 'Orbitron', monospace;
+  font-size: clamp(2.5rem, 5vw, 4rem);
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  margin-bottom: 1rem;
+  background: var(--gradient-primary);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 30px var(--opsvista-glow));
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+h2 {
+  font-family: 'Orbitron', monospace;
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  font-weight: 700;
+  margin-bottom: 0.75rem;
+  color: var(--opsvista-orange);
+}
+
+h3 {
+  font-family: 'Orbitron', monospace;
+  font-size: clamp(1.25rem, 2vw, 1.75rem);
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--opsvista-accent);
+}
+
+p {
+  margin-bottom: 1rem;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 300;
+}
+
+/* Enhanced Link Styling */
+a {
   font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
+  color: var(--opsvista-orange);
+  text-decoration: none;
+  position: relative;
+  transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-block;
+}
+
+a::before {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--gradient-primary);
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 300ms ease;
+}
+
+a:hover {
+  color: var(--opsvista-accent);
+  text-shadow: 0 0 20px var(--opsvista-glow);
+}
+
+a:hover::before {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+/* Premium Button Styling */
+button {
+  font-family: 'Inter', sans-serif;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  padding: 0.75em 1.5em;
+  font-size: 1em;
+  font-weight: 600;
   cursor: pointer;
-  transition: border-color 0.25s;
+  position: relative;
+  overflow: hidden;
+  transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  
+  /* Gradient background */
+  background: linear-gradient(135deg, var(--opsvista-dark) 0%, #2D2D2D 100%);
+  color: var(--opsvista-orange);
+  border: 1px solid var(--opsvista-orange);
+  
+  /* Shadows */
+  box-shadow: 
+    0 4px 15px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
+
+/* Button hover state */
+button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: var(--gradient-primary);
+  transition: left 300ms ease;
+  z-index: -1;
+}
+
 button:hover {
-  border-color: #646cff;
+  color: white;
+  border-color: transparent;
+  transform: translateY(-2px);
+  box-shadow: 
+    0 6px 20px rgba(255, 140, 66, 0.4),
+    0 0 30px var(--opsvista-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
+
+button:hover::before {
+  left: 0;
+}
+
+button:active {
+  transform: translateY(0);
+  box-shadow: 
+    0 2px 10px rgba(255, 140, 66, 0.3),
+    inset 0 1px 0 rgba(0, 0, 0, 0.2);
+}
+
 button:focus,
 button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  outline: 3px solid var(--opsvista-orange);
+  outline-offset: 2px;
 }
 
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--opsvista-orange);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* Input fields styling */
+input, textarea, select {
+  font-family: inherit;
+  font-size: 1rem;
+  padding: 0.75em 1em;
+  border: 1px solid rgba(255, 140, 66, 0.3);
+  border-radius: 8px;
+  background: rgba(26, 26, 26, 0.5);
+  color: white;
+  transition: all 300ms ease;
+  backdrop-filter: blur(10px);
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--opsvista-orange);
+  box-shadow: 
+    0 0 0 3px rgba(255, 140, 66, 0.2),
+    0 0 20px var(--opsvista-glow);
+  background: rgba(26, 26, 26, 0.8);
+}
+
+/* Code styling */
+code {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  background: rgba(255, 140, 66, 0.1);
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* Light mode adjustments */
 @media (prefers-color-scheme: light) {
   :root {
-    color: #213547;
-    background-color: #ffffff;
+    color: var(--opsvista-dark);
+    background-color: #FAFAFA;
   }
+  
+  body {
+    background: linear-gradient(135deg, #FFFFFF 0%, #F5F5F5 100%);
+  }
+  
+  body::before {
+    background-image: 
+      radial-gradient(at 40% 20%, rgba(255, 140, 66, 0.1) 0px, transparent 50%),
+      radial-gradient(at 80% 0%, rgba(255, 176, 136, 0.08) 0px, transparent 50%);
+  }
+  
   a:hover {
-    color: #747bff;
+    color: var(--opsvista-dark);
+    text-shadow: 0 0 20px rgba(255, 140, 66, 0.3);
   }
+  
   button {
-    background-color: #f9f9f9;
+    background: var(--gradient-primary);
+    color: white;
+    border-color: transparent;
+  }
+  
+  button:hover {
+    background: linear-gradient(135deg, #FF7A2F 0%, #FF9E75 100%);
+    color: white;
+  }
+  
+  input, textarea, select {
+    background: rgba(255, 255, 255, 0.8);
+    color: var(--opsvista-dark);
+    border-color: rgba(255, 140, 66, 0.2);
+  }
+}
+
+/* Responsive Typography */
+@media (max-width: 768px) {
+  :root {
+    font-size: 14px;
+  }
+  
+  h1 {
+    font-size: 2rem;
+  }
+  
+  h2 {
+    font-size: 1.5rem;
+  }
+  
+  h3 {
+    font-size: 1.25rem;
+  }
+}
+
+/* Animation Utilities */
+.fade-in {
+  animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.slide-in {
+  animation: slideIn 0.5s ease-out;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+/* Loading states */
+.skeleton {
+  background: linear-gradient(90deg, rgba(255, 140, 66, 0.1) 25%, rgba(255, 140, 66, 0.2) 50%, rgba(255, 140, 66, 0.1) 75%);
+  background-size: 200% 100%;
+  animation: loading 1.5s infinite;
+}
+
+@keyframes loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--opsvista-darker);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gradient-primary);
+  border-radius: 6px;
+  transition: all 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--opsvista-orange);
+  box-shadow: 0 0 10px var(--opsvista-glow);
+}
+
+/* Print styles */
+@media print {
+  body {
+    background: white;
+    color: black;
+  }
+  
+  a {
+    color: var(--opsvista-dark);
+    text-decoration: underline;
   }
 }

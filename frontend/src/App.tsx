@@ -8,7 +8,6 @@ import TaskMetrics from './components/tasks/TaskMetrics';
 import AuthForm from './components/AuthForm';
 import LogoutButton from './components/LogoutButton';
 
-
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL!,
   import.meta.env.VITE_SUPABASE_ANON_KEY!
@@ -21,12 +20,10 @@ export default function App() {
   const [showModal, setShowModal] = useState(false);
 
   useEffect(() => {
-    // 1-shot fetch
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
     });
 
-    // live listener
     const {
       data: { subscription }
     } = supabase.auth.onAuthStateChange((_event, sess) => {
@@ -39,22 +36,42 @@ export default function App() {
   if (!session) return <AuthForm />;
 
   const userId = session.user.id;
+  const currentUserRole = session.user.app_metadata?.role || 'user';
+
+  // NEW: Determine what to show based on role
+  const isManager = ['owner', 'admin', 'manager'].includes(currentUserRole);
 
   return (
     <QueryClientProvider client={qc}>
       <h1>Mini Task Board</h1>
-      <LogoutButton/>
-
-      <TaskMetrics />
-      <button onClick={() => setShowModal(true)}>+ Create Task</button>
+      <LogoutButton />
+      
+      {/* Only show metrics for managers */}
+      {isManager && <TaskMetrics />}
+      
+      {/* Only show create button for managers */}
+      {isManager && (
+        <button onClick={() => setShowModal(true)}>+ Create Task</button>
+      )}
+      
       {showModal && (
         <TaskCreationModal
           assigneeId={userId}
           onClose={() => setShowModal(false)}
-          onCreated={() => qc.invalidateQueries({ queryKey: ['tasks', userId] })}
+          onCreated={() => {
+            // Invalidate both queries to refresh the list
+            qc.invalidateQueries({ queryKey: ['tasks', userId] });
+            qc.invalidateQueries({ queryKey: ['allTasks'] });
+          }}
         />
       )}
-      <TaskList assigneeId={userId} />
+
+      {/* UPDATED: Pass role info to TaskList */}
+      <TaskList 
+        assigneeId={userId} 
+        currentUserRole={currentUserRole}
+        isManager={isManager}
+      />
     </QueryClientProvider>
   );
 }

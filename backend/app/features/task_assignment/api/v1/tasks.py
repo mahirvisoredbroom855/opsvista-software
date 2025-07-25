@@ -2,15 +2,22 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import Body
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-# Shared helpers
-from backend.app.core.auth_deps import get_current_user, UserCtx
 
-# Feature‑specific models & service
-from backend.app.features.task_assignment.models.task import (
+security = HTTPBearer()
+
+
+
+
+from app.core.auth_deps import get_current_user, UserCtx
+from app.features.task_assignment.models.task import (
     TaskCreate, TaskUpdate, TaskResponse, TaskStatus
 )
-from backend.app.features.task_assignment.services.task_service import TaskService
+from app.features.task_assignment.services.task_service import TaskService
+
+
 
 # 🔐 Security scheme for Swagger (adds "Authorize" button)
 bearer_scheme = HTTPBearer()
@@ -121,3 +128,43 @@ def get_task_metrics(
     return service.get_metrics()  # Remove user_token parameter
 
 
+# ───────────────────────── DELETE ───────────────────────── #
+
+@router.delete("/{task_id}")
+async def delete_task(
+    task_id: UUID,
+    user: UserCtx = Depends(get_current_user),
+):
+    print(f"👮 DELETE requested by {user.id} with role {user.role}")
+
+    # Check if task exists first
+
+
+    if user.role not in ("owner", "admin", "manager"):
+        raise HTTPException(status_code=403, detail="Not authorized to delete tasks")
+    
+    result = TaskService.delete_task(task_id)  # 🚫 no await here
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found or could not be deleted")
+    
+    return {"deleted": True}
+
+
+
+# ───────────────────────── LIST ALL TASKS (for managers) ───────────────────────── #
+
+@router.get("/all")
+def list_all_tasks(
+    user: UserCtx = Depends(get_current_user),
+    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme)
+):
+    """Owners/Admins/Managers can see all tasks."""
+    
+    if user.role not in {"owner", "admin", "manager"}:
+        raise HTTPException(403, "Only managers can view all tasks")
+    
+    print(f"🔍 DEBUG - Manager {user.id} ({user.role}) requesting all tasks")
+    
+    # Call a new service method for all tasks
+    return service.list_all_tasks()

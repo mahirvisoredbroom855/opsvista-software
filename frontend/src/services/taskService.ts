@@ -44,6 +44,9 @@ export const patchTaskStatus = (id: string, status: TaskStatus) => {
   });
 };
 
+export const listAllTasks = () =>
+  apiFetch<Task[]>('/api/v1/tasks/all');
+
 export const createTask = (body: TaskCreate) =>
   apiFetch<Task>('/api/v1/tasks', {
     method: 'POST',
@@ -54,3 +57,9 @@ export const listTasks = (assigneeId: string) =>
   apiFetch<Task[]>(`/api/v1/tasks/assigned/${assigneeId}`);
 
 export const getMetrics = () => apiFetch<Metrics>('/api/v1/tasks/metrics');
+
+
+export const deleteTask = (id: string) =>
+  apiFetch<{ deleted: boolean }>(`/api/v1/tasks/${id}`, {
+    method: 'DELETE'
+  });

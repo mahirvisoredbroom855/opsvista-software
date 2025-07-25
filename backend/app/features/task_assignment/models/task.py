@@ -45,3 +45,4 @@ class TaskResponse(BaseModel):
     priority: TaskPriority
     updated_at: datetime
     done_at: Optional[datetime]
+    assignee_name: Optional[str] = None

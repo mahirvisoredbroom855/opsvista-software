@@ -21,6 +21,7 @@ export interface Task {
   priority: TaskPriority;
   updated_at: string;
   done_at?: string;
+  assignee_name?: string; 
 }
 
 export interface Metrics {
