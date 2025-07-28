@@ -1,0 +1,62 @@
+{
+  "file_patterns": {
+    "cash_book": {
+      "filename_patterns": ["Cash Book", "CashBook", "cash_book"],
+      "sheet_patterns": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+      "field_mappings": {
+        "date": ["Date"],
+        "cash_received": ["Cash Received"],
+        "factory_amount": ["Factory"],
+        "factory_cr": ["Factory Cr"],
+        "head_off": ["Head off"],
+        "total": ["Total"],
+        "particulars": ["Particulars"],
+        "amount": ["Amount"],
+        "price": ["Price"],
+        "remarks": ["Remarks"]
+      }
+    },
+    "party_due_bill": {
+      "filename_patterns": ["Party Due Bill", "Cash Party Due Bill", "due_bill"],
+      "field_mappings": {
+        "sl_number": ["SL", "Sl", "Serial"],
+        "description": ["Description of Goods/Payment", "Description"],
+        "party_name": ["Party Name"],
+        "date": ["Date"],
+        "bill_number": ["Bill No"],
+        "quantity": ["Quantity"],
+        "unit_price": ["Unit Price"],
+        "amount": ["Amount"],
+        "total_amount": ["Total Amount"],
+        "advance_tk": ["Advance TK"],
+        "due_bill": ["Due Bill"]
+      }
+    },
+    "expenditure_summary": {
+      "filename_patterns": ["Expenditure", "PTIL Expenditure", "expenditure"],
+      "field_mappings": {
+        "year": ["Year"],
+        "expenditure": ["Expenditure"],
+        "expenditure_fixed_cost": ["Expenditure Fixed Cost"],
+        "ptil_total_tk": ["PTIL Total TK"],
+        "lc_usd": ["LC USD"],
+        "bill_usd": ["Bill USD"],
+        "due_usd": ["Due USD"],
+        "total_usd": ["Total USD"],
+        "bd_tk": ["BD TK"],
+        "loss": ["Loss"],
+        "profit": ["Profit"]
+      }
+    }
+  },
+  "data_validation": {
+    "required_fields": {
+      "cash_book": ["date"],
+      "party_due_bill": ["party_name", "date"],
+      "expenditure_summary": ["year"]
+    },
+    "amount_fields": ["cash_received", "factory_amount", "amount", "total_amount", "expenditure", "lc_usd"],
+    "date_formats": ["%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"],
+    "currency_codes": ["BDT", "USD", "TK"]
+  }
+}

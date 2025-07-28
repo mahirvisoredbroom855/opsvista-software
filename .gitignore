@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Environment
+.env
+.env.local
+
+# Google Credentials  
+google_credentials.json
+**/google_credentials.json
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite
+
+# Redis
+dump.rdb
+
+# Celery
+celerybeat-schedule
