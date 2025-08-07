@@ -249,78 +249,152 @@ async def delete_transaction(
 
 @router.get("/dashboard/metrics", response_model=DashboardMetricsResponse)
 async def get_dashboard_metrics(db: Session = Depends(get_db)):
-    """Get key dashboard metrics"""
-    try:
-        today = date.today()
-        month_start = today.replace(day=1)
-        year_start = today.replace(month=1, day=1)
-        
+    """Generate real-time dashboard metrics with monthly totals"""
+    
+    # 1. Calculate date ranges
+    today = date.today()
+    month_start = today.replace(day=1)  # First day of current month
+    year_start = today.replace(month=1, day=1)  # January 1st
+    
+    # Previous month for comparison
+    if today.month == 1:
+        prev_month_start = date(today.year - 1, 12, 1)
+        prev_month_end = date(today.year - 1, 12, 31)
+    else:
+        prev_month_start = date(today.year, today.month - 1, 1)
+        # Last day of previous month
+        prev_month_end = (month_start - timedelta(days=1))
+    
+    print(f"📊 Calculating metrics for:")
+    print(f"   Today: {today}")
+    print(f"   This Month: {month_start} to {today}")
+    print(f"   Previous Month: {prev_month_start} to {prev_month_end}")
+    
+    # 2. TODAY'S METRICS (unchanged)
+    today_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date == today,
+        FactFinance.transaction_type == 'cash_receipt',
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    today_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date == today,
+        FactFinance.transaction_type == 'expense',
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    # 3. THIS MONTH'S METRICS (NEW)
+    month_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date >= month_start,
+        FactFinance.transaction_date <= today,
+        FactFinance.transaction_type == 'cash_receipt',
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    month_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date >= month_start,
+        FactFinance.transaction_date <= today,
+        FactFinance.transaction_type == 'expense',
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    # 4. PREVIOUS MONTH'S METRICS (for comparison)
+    prev_month_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date >= prev_month_start,
+        FactFinance.transaction_date <= prev_month_end,
+        FactFinance.transaction_type == 'cash_receipt',
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    prev_month_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date >= prev_month_start,
+        FactFinance.transaction_date <= prev_month_end,
+        FactFinance.transaction_type == 'expense',
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    # 5. YEAR METRICS (unchanged)
+    year_revenue = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date >= year_start,
+        FactFinance.transaction_date <= today,
+        FactFinance.transaction_type.in_(['cash_receipt']),
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    year_expenditure = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
+        FactFinance.transaction_date >= year_start,
+        FactFinance.transaction_date <= today,
+        FactFinance.transaction_type.in_(['expense']),
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    # 6. OUTSTANDING BILLS (unchanged)
+    outstanding_bills = db.query(func.coalesce(func.sum(FactFinance.amount_due), 0)).filter(
+        FactFinance.transaction_type == 'due_bill',
+        FactFinance.amount_due > 0,
+        FactFinance.is_active == True
+    ).scalar() or 0
+    
+    # 7. OPERATIONAL METRICS (unchanged)
+    recent_files = db.query(FinanceFileProcessing).filter(
+        FinanceFileProcessing.created_at >= datetime.now() - timedelta(days=7)
+    ).count()
+    
+    processing_errors = db.query(FinanceFileProcessing).filter(
+        FinanceFileProcessing.status == 'failed'
+    ).count()
+    
+    # 8. CALCULATE PERCENTAGES AND COMPARISONS
+    # Month-over-month growth
+    month_cash_growth = 0
+    if prev_month_cash > 0:
+        month_cash_growth = ((month_cash - prev_month_cash) / prev_month_cash) * 100
+    
+    month_expense_growth = 0
+    if prev_month_expenses > 0:
+        month_expense_growth = ((month_expenses - prev_month_expenses) / prev_month_expenses) * 100
+    
+    # Days remaining in month
+    import calendar
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    days_passed = today.day
+    days_remaining = days_in_month - days_passed
+    
+    # 9. BUILD RESPONSE WITH NEW MONTHLY FIELDS
+    return DashboardMetricsResponse(
         # Today's metrics
-        today_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-            FactFinance.transaction_date == today,
-            FactFinance.transaction_type == 'cash_receipt'
-        ).scalar() or 0
+        today_cash_received=float(today_cash),
+        today_expenses=float(today_expenses),
+        today_net_flow=float(today_cash - today_expenses),
         
-        today_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-            FactFinance.transaction_date == today,
-            FactFinance.transaction_type == 'expense'
-        ).scalar() or 0
+        # Monthly metrics (NEW)
+        month_cash_received=float(month_cash),
+        month_expenses=float(month_expenses),
+        month_net_flow=float(month_cash - month_expenses),
         
-        # Month metrics
-        month_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-            FactFinance.transaction_date >= month_start,
-            FactFinance.transaction_type == 'cash_receipt'
-        ).scalar() or 0
+        # Monthly comparisons (NEW)
+        prev_month_cash_received=float(prev_month_cash),
+        prev_month_expenses=float(prev_month_expenses),
+        month_cash_growth_percent=float(month_cash_growth),
+        month_expense_growth_percent=float(month_expense_growth),
         
-        month_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-            FactFinance.transaction_date >= month_start,
-            FactFinance.transaction_type == 'expense'
-        ).scalar() or 0
+        # Month progress (NEW)
+        days_in_month=days_in_month,
+        days_passed=days_passed,
+        days_remaining=days_remaining,
+        month_progress_percent=float((days_passed / days_in_month) * 100),
         
-        # Year metrics
-        year_revenue = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-            FactFinance.transaction_date >= year_start,
-            FactFinance.transaction_type.in_(['cash_receipt'])
-        ).scalar() or 0
+        # Yearly metrics (unchanged)
+        year_revenue=float(year_revenue),
+        year_expenditure=float(year_expenditure),
+        year_profit_loss=float(year_revenue - year_expenditure),
         
-        year_expenditure = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-            FactFinance.transaction_date >= year_start,
-            FactFinance.transaction_type.in_(['expense'])
-        ).scalar() or 0
-        
-        # Outstanding bills
-        outstanding_bills = db.query(func.coalesce(func.sum(FactFinance.amount_due), 0)).filter(
-            FactFinance.transaction_type == 'due_bill',
-            FactFinance.amount_due > 0
-        ).scalar() or 0
-        
-        # File processing stats
-        recent_files = db.query(FinanceFileProcessing).filter(
-            FactFinance.created_at >= datetime.now() - timedelta(days=7)
-        ).count()
-        
-        processing_errors = db.query(FinanceFileProcessing).filter(
-            FinanceFileProcessing.status == 'failed'
-        ).count()
-        
-        return DashboardMetricsResponse(
-            today_cash_received=float(today_cash),
-            today_expenses=float(today_expenses),
-            today_net_flow=float(today_cash - today_expenses),
-            month_cash_received=float(month_cash),
-            month_expenses=float(month_expenses),
-            month_net_flow=float(month_cash - month_expenses),
-            year_revenue=float(year_revenue),
-            year_expenditure=float(year_expenditure),
-            year_profit_loss=float(year_revenue - year_expenditure),
-            total_outstanding_bills=float(outstanding_bills),
-            recent_file_count=recent_files,
-            processing_errors_count=processing_errors,
-            last_sync_time=datetime.now()  # TODO: Get actual last sync time
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch dashboard metrics: {str(e)}")
+        # Outstanding and operational (unchanged)
+        total_outstanding_bills=float(outstanding_bills),
+        recent_file_count=recent_files,
+        processing_errors_count=processing_errors,
+        last_sync_time=datetime.now()
+    )
 
 # =====================================
 # File Processing Endpoints

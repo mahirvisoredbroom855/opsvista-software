@@ -183,16 +183,35 @@ class PaginatedRawDataResponse(BaseModel):
 # =====================================
 
 class DashboardMetricsResponse(BaseModel):
-    """Key dashboard metrics"""
+    """Key dashboard metrics with monthly totals"""
+    # Today's metrics
     today_cash_received: float
     today_expenses: float
     today_net_flow: float
+    
+    # Monthly metrics (NEW)
     month_cash_received: float
     month_expenses: float
     month_net_flow: float
+    
+    # Monthly comparisons (NEW) 
+    prev_month_cash_received: float
+    prev_month_expenses: float
+    month_cash_growth_percent: float
+    month_expense_growth_percent: float
+    
+    # Month progress tracking (NEW)
+    days_in_month: int
+    days_passed: int
+    days_remaining: int
+    month_progress_percent: float
+    
+    # Yearly metrics (unchanged)
     year_revenue: float
     year_expenditure: float
     year_profit_loss: float
+    
+    # Operational metrics (unchanged)
     total_outstanding_bills: float
     recent_file_count: int
     processing_errors_count: int
