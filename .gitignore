@@ -1,4 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
-*.env
+*.envbackend/credentials/*.json
+.env*
+__pycache__/
+*.pyc
