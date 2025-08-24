@@ -1,12 +1,10 @@
 from __future__ import annotations
-import os
-import logging
+import os, logging
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# Load .env if available (non-fatal if not present)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -18,7 +16,6 @@ log = logging.getLogger("opsvista")
 
 app = FastAPI(title="OpsVista Backend", version="0.1.0")
 
-# --- CORS (Vite dev on 5173 by default) ---
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
@@ -28,42 +25,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def _try_include(import_path: str, attr: str = "router", prefix: str = "", tags: list[str] | None = None):
-    """
-    Import a module and include its FastAPI router if present.
-    Keeps server boot resilient across feature branches.
-    """
-    try:
-        mod = __import__(import_path, fromlist=[attr])
-        router = getattr(mod, attr, None)
-        if router is None:
-            log.warning("Module %s has no attribute '%s'", import_path, attr)
+def _try_include_any(import_paths: list[str], attr: str = "router", prefix: str = "", tags: list[str] | None = None):
+    for import_path in import_paths:
+        try:
+            mod = __import__(import_path, fromlist=[attr])
+            router = getattr(mod, attr, None)
+            if router is None:
+                log.warning("Module %s has no attribute '%s'", import_path, attr)
+                continue
+            app.include_router(router, prefix=prefix, tags=tags)
+            log.info("Mounted %s at %s", import_path, prefix or "/")
             return
-        app.include_router(router, prefix=prefix, tags=tags)
-        log.info("Mounted %s at %s", import_path, prefix or "/")
-    except Exception as e:
-        log.warning("Skipping %s: %s", import_path, e)
+        except Exception as e:
+            log.warning("Skipping %s: %s", import_path, e)
 
-# --- Mount feature routers (Finance / RAG / Tasks) ---
 # Finance
-_try_include("backend.app.features.finance.router", attr="router", prefix="/api/finance", tags=["finance"])
+_try_include_any(
+    ["app.features.finance.router", "backend.app.features.finance.router"],
+    attr="router", prefix="/api/finance", tags=["finance"]
+)
 
 # RAG Chatbot
-_try_include("backend.app.features.rag_chatbot.api.chat", attr="router", prefix="/api/chat", tags=["rag-chat"])
-_try_include("backend.app.features.rag_chatbot.api.discovery", attr="router", prefix="/api/rag/discovery", tags=["rag-discovery"])
-_try_include("backend.app.features.rag_chatbot.api.chat_gdrive_integration", attr="router", prefix="/api/rag/gdrive", tags=["rag-gdrive"])
+_try_include_any(
+    ["app.features.rag_chatbot.api.chat", "backend.app.features.rag_chatbot.api.chat"],
+    attr="router", prefix="/api/chat", tags=["rag-chat"]
+)
+_try_include_any(
+    ["app.features.rag_chatbot.api.discovery", "backend.app.features.rag_chatbot.api.discovery"],
+    attr="router", prefix="/api/rag/discovery", tags=["rag-discovery"]
+)
+_try_include_any(
+    ["app.features.rag_chatbot.api.chat_gdrive_integration", "backend.app.features.rag_chatbot.api.chat_gdrive_integration"],
+    attr="router", prefix="/api/rag/gdrive", tags=["rag-gdrive"]
+)
 
-# Task Assignment
-_try_include("backend.app.features.task_assignment.api.v1.tasks", attr="router", prefix="/api/v1/tasks", tags=["tasks"])
-_try_include("backend.app.features.task_assignment.api.v1.sessions", attr="router", prefix="/api/v1/sessions", tags=["auth"])
+# Tasks
+_try_include_any(
+    ["app.features.task_assignment.api.v1.tasks", "backend.app.features.task_assignment.api.v1.tasks"],
+    attr="router", prefix="/api/v1/tasks", tags=["tasks"]
+)
+_try_include_any(
+    ["app.features.task_assignment.api.v1.sessions", "backend.app.features.task_assignment.api.v1.sessions"],
+    attr="router", prefix="/api/v1/sessions", tags=["auth"]
+)
 
-# --- Static files (optional) ---
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     log.info("Mounted static at /static")
 
-# --- Health & root ---
 @app.get("/health")
 def health():
     return {"status": "ok"}

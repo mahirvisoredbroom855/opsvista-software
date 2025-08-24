@@ -2,6 +2,7 @@
 """
 Application Configuration Settings
 """
+from __future__ import annotations
 
 import os
 import secrets
@@ -12,20 +13,31 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator  # v2-style validators
 
-RAG_INDEX_PATH = os.getenv("RAG_INDEX_PATH")  # may be None; chat.py fills it
-<<<<<<< HEAD
-OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-USE_MOCK_EMBEDDINGS = os.getenv("USE_MOCK_EMBEDDINGS", "false").lower() == "true"
 
-=======
-USE_MOCK_EMBEDDINGS='false'
-OPENAI_EMBEDDING_MODEL='text-embedding-3-small'
->>>>>>> origin/feat/task-assignment
 
-# --- locate project root and .env ---
-# this file: <root>/backend/app/core/config.py
-ROOT_DIR = Path(__file__).resolve().parents[3]  # -> <root>
-ENV_FILE = ROOT_DIR / ".env"
+# Minimal, dependency-free settings used by the routers
+class Settings:
+    FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+
+    # Supabase (finance, auth)
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+    SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+
+    # RAG / OpenAI
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
+    OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "2000"))
+    OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    USE_MOCK_EMBEDDINGS = os.getenv("USE_MOCK_EMBEDDINGS", "true").lower() in ("1", "true", "yes")
+
+    # Google Drive (optional)
+    GOOGLE_DRIVE_CREDENTIALS_PATH = os.getenv("GOOGLE_DRIVE_CREDENTIALS_PATH", "")
+
+settings = Settings()
+
 
 
 class Settings(BaseSettings):
