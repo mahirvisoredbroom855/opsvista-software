@@ -78,6 +78,7 @@ def test_google_drive_connection():
 
 if __name__ == "__main__":
     test_google_drive_connection()
+<<<<<<< HEAD
 
 
 
@@ -86,3 +87,5 @@ if __name__ == "__main__":
 
 
 
+=======
+>>>>>>> origin/feat/finances-dashboard

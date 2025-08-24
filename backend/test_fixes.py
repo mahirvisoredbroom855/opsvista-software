@@ -3,7 +3,10 @@ import sys
 sys.path.append('app')
 import openpyxl
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> origin/feat/finances-dashboard
 from app.features.finance.excel_processor import ExcelProcessor
 
 # Mock DB
@@ -41,7 +44,11 @@ def test_fixes():
             else:
                 print(f"   ❌ {method} - MISSING!")
                 missing.append(method)
+<<<<<<< HEAD
 
+=======
+        
+>>>>>>> origin/feat/finances-dashboard
         if missing:
             print(f"\n❌ {len(missing)} methods still missing!")
             return False
