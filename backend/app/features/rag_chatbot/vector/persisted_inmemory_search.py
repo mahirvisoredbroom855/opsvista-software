@@ -57,6 +57,7 @@ class PersistedInMemorySearch:
     Stores: [{'id', 'text', 'metadata', 'vector'}]
     """
     def __init__(self, index_path: str | Path = None):
+        
         self.index_path = Path(index_path or os.getenv("RAG_INDEX_PATH", "backend/app/features/rag_chatbot/vector/.index.json"))
         self.items: List[Dict[str, Any]] = []
         self.dim: Optional[int] = None
