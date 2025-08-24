@@ -34,7 +34,7 @@ try:
     from .vector_search_optimizer import (
         VectorSearchOptimizer, EnhancedSearchResult, SearchStrategy
     )
-    from .business_context_integration import (
+    from ..search.business_context_integration import (
         BusinessContextIntegrationEngine, EnhancedBusinessResult,
         ContextualRelevance, BusinessSeason
     )
