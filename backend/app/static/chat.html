@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>OpsVista Chat (Non-Streaming)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system; margin: 24px; max-width: 880px; }
+    #out { 
+      white-space: pre-wrap; 
+      border: 1px solid #ddd; 
+      padding: 12px; 
+      border-radius: 8px; 
+      min-height: 140px;
+      line-height: 1.5;
+    }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    input, button { padding: 8px 12px; font-size: 15px; }
+    input { flex: 1; }
+    .meta { color: #444; font-size: 13px; margin-top: 8px; }
+    .loading { color: #666; font-style: italic; }
+    .error { color: #d73a49; background: #ffeef0; padding: 8px; border-radius: 4px; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>OpsVista Chat</h1>
+  <div class="row">
+    <input id="q" placeholder="Type a message…" />
+    <button id="send">Send</button>
+  </div>
+  <div class="meta" id="meta"></div>
+  <h3>Response</h3>
+  <div id="out"></div>
+
+  <script>
+    const sendBtn = document.getElementById("send");
+    const input = document.getElementById("q");
+    const out = document.getElementById("out");
+    const meta = document.getElementById("meta");
+
+    async function send() {
+      const q = input.value.trim();
+      if (!q) return;
+
+      // Disable input during request
+      sendBtn.disabled = true;
+      input.disabled = true;
+      
+      // Clear previous results
+      out.textContent = "";
+      meta.textContent = "";
+      
+      // Show loading state
+      out.className = "loading";
+      out.textContent = "Processing your request...";
+
+      try {
+        const response = await fetch('/api/rag/chat/complete', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            message: q,
+            use_retrieval: true,
+            debug: true,
+            top_k: 4
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        
+        // Clear loading state
+        out.className = "";
+        
+        // Display response
+        out.textContent = data.content;
+
+        // Display metadata
+        if (data.sources && data.sources.length > 0) {
+          meta.textContent = `Model: ${data.model || 'unknown'} | Sources: ${data.sources.length}`;
+          
+          if (data.trace) {
+            meta.textContent += ` | Retriever: ${data.trace.impl || 'unknown'} | Time: ${data.trace.took_ms || 0}ms | Hits: ${data.trace.count || 0}`;
+          }
+          
+          if (data.usage) {
+            meta.textContent += ` | Tokens: ${data.usage.total_tokens || 0}`;
+          }
+        } else {
+          meta.textContent = `Model: ${data.model || 'unknown'} | No sources found`;
+        }
+
+      } catch (error) {
+        out.className = "error";
+        out.textContent = `Error: ${error.message}`;
+        meta.textContent = "";
+        console.error('Chat request failed:', error);
+      } finally {
+        // Re-enable input
+        sendBtn.disabled = false;
+        input.disabled = false;
+        input.focus();
+      }
+    }
+
+    // Event listeners
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    });
+
+    // Focus input on page load
+    input.focus();
+  </script>
+</body>
+</html>

@@ -1,6 +1,14 @@
 # Auto-generated __init__.py
-__all__ = []
+"""
+RAG vector package.
 
+Exports:
+- PersistedInMemorySearch: tiny file-backed/memory-backed vector store
+"""
+from .persisted_inmemory_search import PersistedInMemorySearch
+
+__all__ = ["PersistedInMemorySearch"]
+__version__ = "0.1.0"
 # Add to backend/app/features/rag_chatbot/vector/__init__.py:
 
 
@@ -17,10 +25,6 @@ except ImportError:
     EnhancedVectorDatabaseClient = None
     create_vector_client = None
 
-try:
-    from .persisted_inmemory_search import PersistedInMemorySearch
-except ImportError:
-    PersistedInMemorySearch = None
 
 try:
     from .sophisticated_embedding_system import SophisticatedEmbeddingSystem
@@ -34,4 +38,3 @@ __all__ = [
     'PersistedInMemorySearch',
     'SophisticatedEmbeddingSystem'
 ]
-

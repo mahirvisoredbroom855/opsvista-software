@@ -1,36 +1,49 @@
-# Environment variables
+# macOS
+.DS_Store
+
+# Env & secrets (do not commit real keys)
 .env
-.env.local
-.env.production
+*.env.local
+*.env.*
+.envrc
 
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
+*.egg-info/
 .venv/
+venv/
+.pex/
+.pytest_cache/
+.coverage*
+.mypy_cache/
+.pyre/
 
-# Node modules (for frontend)
+# Node / Next.js
 node_modules/
-.npm
+.next/
+out/
+dist/
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# IDE
+# TypeScript
+*.tsbuildinfo
+
+# Vercel
+.vercel/
+
+# IDE / editors
 .vscode/
 .idea/
 *.swp
-*.swo
 
-# OS
-.DS_Store
-Thumbs.db
+# Caches
+.cache/
+.tmp/
 
-# Logs
-*.log
-logs/
+# Data dumps / scratch
+tmp/
 
-# Database
-*.db
-*.sqlite3
