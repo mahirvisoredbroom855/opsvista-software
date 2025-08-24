@@ -1,0 +1,140 @@
+[2025-08-11 23:33:55] [INFO] Starting Task 1C Phase 1 testing
+[2025-08-11 23:33:55] [INFO] Checking prerequisites...
+[2025-08-11 23:33:57] [SUCCESS] Python 3 found: 3.13.5
+[2025-08-11 23:33:57] [SUCCESS] pip found
+[2025-08-11 23:33:57] [WARN] No virtual environment detected. Consider using one.
+[2025-08-11 23:33:57] [INFO] Installing/checking dependencies...
+[2025-08-11 23:33:57] [INFO] Installing core dependencies...
+Requirement already satisfied: pytest>=7.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (8.4.1)
+Requirement already satisfied: iniconfig>=1 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pytest>=7.0.0) (2.1.0)
+Requirement already satisfied: packaging>=20 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pytest>=7.0.0) (24.2)
+Requirement already satisfied: pluggy<2,>=1.5 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pytest>=7.0.0) (1.5.0)
+Requirement already satisfied: pygments>=2.7.2 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pytest>=7.0.0) (2.18.0)
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:07] [SUCCESS] Installed: pytest>=7.0.0
+Requirement already satisfied: pandas>=1.5.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (2.2.3)
+Requirement already satisfied: numpy>=1.26.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pandas>=1.5.0) (2.2.1)
+Requirement already satisfied: python-dateutil>=2.8.2 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pandas>=1.5.0) (2.9.0.post0)
+Requirement already satisfied: pytz>=2020.1 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pandas>=1.5.0) (2024.2)
+Requirement already satisfied: tzdata>=2022.7 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pandas>=1.5.0) (2024.2)
+Requirement already satisfied: six>=1.5 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from python-dateutil>=2.8.2->pandas>=1.5.0) (1.17.0)
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:08] [SUCCESS] Installed: pandas>=1.5.0
+Requirement already satisfied: numpy>=1.21.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (2.2.1)
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:09] [SUCCESS] Installed: numpy>=1.21.0
+Collecting asyncio
+  Downloading asyncio-4.0.0-py3-none-any.whl.metadata (994 bytes)
+Downloading asyncio-4.0.0-py3-none-any.whl (5.6 kB)
+Installing collected packages: asyncio
+Successfully installed asyncio-4.0.0
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:12] [SUCCESS] Installed: asyncio
+Requirement already satisfied: rich>=12.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (14.0.0)
+Requirement already satisfied: markdown-it-py>=2.2.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from rich>=12.0.0) (3.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from rich>=12.0.0) (2.18.0)
+Requirement already satisfied: mdurl~=0.1 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from markdown-it-py>=2.2.0->rich>=12.0.0) (0.1.2)
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:13] [SUCCESS] Installed: rich>=12.0.0
+[2025-08-11 23:34:13] [INFO] Installing optional dependencies...
+Requirement already satisfied: openpyxl>=3.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (3.1.5)
+Requirement already satisfied: et-xmlfile in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from openpyxl>=3.0.0) (2.0.0)
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:14] [SUCCESS] Installed optional: openpyxl>=3.0.0
+Requirement already satisfied: PyPDF2>=3.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (3.0.1)
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:15] [SUCCESS] Installed optional: PyPDF2>=3.0.0
+Collecting pdfplumber>=0.7.0
+  Using cached pdfplumber-0.11.7-py3-none-any.whl.metadata (42 kB)
+Collecting pdfminer.six==20250506 (from pdfplumber>=0.7.0)
+  Using cached pdfminer_six-20250506-py3-none-any.whl.metadata (4.2 kB)
+Requirement already satisfied: Pillow>=9.1 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pdfplumber>=0.7.0) (11.0.0)
+Collecting pypdfium2>=4.18.0 (from pdfplumber>=0.7.0)
+  Using cached pypdfium2-4.30.0-py3-none-macosx_10_13_x86_64.whl.metadata (48 kB)
+Requirement already satisfied: charset-normalizer>=2.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pdfminer.six==20250506->pdfplumber>=0.7.0) (3.4.0)
+Requirement already satisfied: cryptography>=36.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pdfminer.six==20250506->pdfplumber>=0.7.0) (45.0.5)
+Requirement already satisfied: cffi>=1.14 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from cryptography>=36.0.0->pdfminer.six==20250506->pdfplumber>=0.7.0) (1.17.1)
+Requirement already satisfied: pycparser in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from cffi>=1.14->cryptography>=36.0.0->pdfminer.six==20250506->pdfplumber>=0.7.0) (2.22)
+Using cached pdfplumber-0.11.7-py3-none-any.whl (60 kB)
+Using cached pdfminer_six-20250506-py3-none-any.whl (5.6 MB)
+Using cached pypdfium2-4.30.0-py3-none-macosx_10_13_x86_64.whl (2.8 MB)
+Installing collected packages: pypdfium2, pdfminer.six, pdfplumber
+
+Successfully installed pdfminer.six-20250506 pdfplumber-0.11.7 pypdfium2-4.30.0
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:18] [SUCCESS] Installed optional: pdfplumber>=0.7.0
+Collecting pytesseract>=0.3.10
+  Downloading pytesseract-0.3.13-py3-none-any.whl.metadata (11 kB)
+Requirement already satisfied: packaging>=21.3 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pytesseract>=0.3.10) (24.2)
+Requirement already satisfied: Pillow>=8.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (from pytesseract>=0.3.10) (11.0.0)
+Downloading pytesseract-0.3.13-py3-none-any.whl (14 kB)
+Installing collected packages: pytesseract
+Successfully installed pytesseract-0.3.13
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:20] [SUCCESS] Installed optional: pytesseract>=0.3.10
+Requirement already satisfied: Pillow>=9.0.0 in /Users/mahirahmed/jupyter_env/lib/python3.13/site-packages (11.0.0)
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: python -m pip install --upgrade pip
+[2025-08-11 23:34:21] [SUCCESS] Installed optional: Pillow>=9.0.0
+[2025-08-11 23:34:21] [INFO] Setting up test environment...
+[2025-08-11 23:34:21] [WARN] Test files not found in expected location
+[2025-08-11 23:34:21] [INFO] Generating test data...
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    from backend.tests.fixtures.task1c_test_data_generator import TestDataManager
+ModuleNotFoundError: No module named 'backend.tests.fixtures.task1c_test_data_generator'
+[2025-08-11 23:34:21] [WARN] Test data generation failed, using fallback data
+[2025-08-11 23:34:21] [INFO] Running individual component tests...
+[2025-08-11 23:34:21] [INFO] Testing Excel Processing Engine...
+Traceback (most recent call last):
+  File "<string>", line 5, in <module>
+    from backend.tests.fixtures.task1c_test_data_generator import create_mock_excel_data
+ModuleNotFoundError: No module named 'backend.tests.fixtures.task1c_test_data_generator'
+[2025-08-11 23:34:22] [ERROR] Excel Processing Engine: FAILED
+[2025-08-11 23:34:22] [INFO] Testing PDF Processing Engine...
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    from backend.tests.fixtures.task1c_test_data_generator import create_mock_pdf_content
+ModuleNotFoundError: No module named 'backend.tests.fixtures.task1c_test_data_generator'
+[2025-08-11 23:34:22] [ERROR] PDF Processing Engine: FAILED
+[2025-08-11 23:34:22] [INFO] Testing Content Normalization...
+Content normalization import: SKIP (No module named 'backend.app.features.rag_chatbot.processing.document_processing_engines')
+[2025-08-11 23:34:22] [SUCCESS] Content Normalization: PASSED
+[2025-08-11 23:34:22] [INFO] Testing Vector Integration...
+DB disabled (asyncpg missing or DATABASE_URL not set). Using in-memory mode.
+Vector client health: healthy
+[2025-08-11 23:34:23] [SUCCESS] Vector Integration: PASSED
+[2025-08-11 23:34:23] [INFO] Running comprehensive test suite...
+/usr/local/Cellar/python@3.13/3.13.5/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python: can't open file '/Users/mahirahmed/Desktop/opsvista/opsvista-software/backend/scripts/run_task1c_tests.py': [Errno 2] No such file or directory
+[2025-08-11 23:34:23] [WARN] Comprehensive test suite failed, running fallback tests
+[2025-08-11 23:34:23] [INFO] Running pytest fallback...
+============================= test session starts ==============================
+platform darwin -- Python 3.13.5, pytest-8.4.1, pluggy-1.5.0 -- /Users/mahirahmed/jupyter_env/bin/python
+cachedir: .pytest_cache
+rootdir: /Users/mahirahmed/Desktop/opsvista/opsvista-software
+plugins: anyio-4.7.0
+collecting ... ERROR: file or directory not found: /Users/mahirahmed/Desktop/opsvista/opsvista-software/backend/tests/rag_chatbot/test_task1c_document_processing.py
+
+collected 0 items
+
+============================ no tests ran in 0.01s =============================
+[2025-08-11 23:34:25] [WARN] Pytest also failed

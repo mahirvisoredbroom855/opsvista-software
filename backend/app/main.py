@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # backend/app/main.py
 from __future__ import annotations
 
@@ -258,6 +259,36 @@ app = FastAPI(
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.error(f"Validation error: {exc.errors()}")
+=======
+# backend/app/main.py
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, ".env"))
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+import traceback
+
+
+# ⬇️  existing feature routers
+from app.features.task_assignment.api.v1.tasks import router as task_router
+
+# ⬇️  NEW – logout /auth endpoints ---------------------------
+from app.features.task_assignment.api.v1.sessions import router as auth_router
+# ------------------------------------------------------------
+
+app = FastAPI(title="OpsVista API", version="0.1.0")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print("❌ Validation error:")
+    traceback.print_exc()
+    print("Body received:", exc.body)
+    print("Validation details:", exc.errors())
+>>>>>>> origin/feat/task-assignment
     return JSONResponse(
         status_code=422,
         content={
@@ -266,15 +297,25 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         },
     )
 
+<<<<<<< HEAD
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000"],
+=======
+
+
+# (optional) CORS — keep if you already have it
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Vite dev server
+>>>>>>> origin/feat/task-assignment
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+<<<<<<< HEAD
 # Include routers
 app.include_router(finance_router)
 
@@ -361,3 +402,12 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:socketio_app", host="0.0.0.0", port=8000, reload=True)
 >>>>>>> origin/feat/finances-dashboard
+=======
+# ⬇️  include all routers
+app.include_router(task_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")   # 🚀 now /api/v1/auth/logout works
+
+
+
+
+>>>>>>> origin/feat/task-assignment

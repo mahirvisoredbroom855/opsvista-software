@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 from __future__ import annotations
 
 from typing import Optional, List, Callable, Dict, Any
@@ -36,6 +37,8 @@ def require_roles(roles: List[str]) -> Callable:
         return user
     return _dep
 =======
+=======
+>>>>>>> origin/feat/task-assignment
 from fastapi import Header, HTTPException, Depends
 from pydantic import BaseModel
 from app.core.supabase_jwt import verify_supabase_token
@@ -72,4 +75,7 @@ def get_current_user(authorization: str = Header(...)) -> UserCtx:
         role=role,
         email=payload.get("email"),
     )
+<<<<<<< HEAD
 >>>>>>> origin/feat/finances-dashboard
+=======
+>>>>>>> origin/feat/task-assignment

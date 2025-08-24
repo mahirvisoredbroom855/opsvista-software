@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 a2wsgi==1.10.10
 adbc_driver_manager==1.7.0
 adbc_driver_postgresql==1.7.0
@@ -297,3 +298,12 @@ wsproto==1.2.0
 yarg==0.1.10
 zstandard==0.24.0
 >>>>>>> origin/feat/finances-dashboard
+=======
+fastapi
+uvicorn[standard]
+pydantic[email]
+asyncpg
+sqlalchemy>=2
+psycopg2-binary
+
+>>>>>>> origin/feat/task-assignment

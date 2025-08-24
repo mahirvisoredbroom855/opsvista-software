@@ -13,9 +13,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator  # v2-style validators
 
 RAG_INDEX_PATH = os.getenv("RAG_INDEX_PATH")  # may be None; chat.py fills it
+<<<<<<< HEAD
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 USE_MOCK_EMBEDDINGS = os.getenv("USE_MOCK_EMBEDDINGS", "false").lower() == "true"
 
+=======
+USE_MOCK_EMBEDDINGS='false'
+OPENAI_EMBEDDING_MODEL='text-embedding-3-small'
+>>>>>>> origin/feat/task-assignment
 
 # --- locate project root and .env ---
 # this file: <root>/backend/app/core/config.py
