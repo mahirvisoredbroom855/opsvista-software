@@ -5,6 +5,7 @@ uvicorn==0.24.0
 # Database
 sqlalchemy==2.0.23
 supabase==2.0.2
+psycopg2-binary==2.9.7
 
 # Excel Processing
 openpyxl==3.1.2
@@ -18,6 +19,7 @@ google-auth-httplib2==0.1.1
 # Utilities
 python-dotenv==1.0.0
 python-multipart==0.0.6
+pydantic-settings==2.0.3
 
 # Data Processing
 pandas==2.1.3

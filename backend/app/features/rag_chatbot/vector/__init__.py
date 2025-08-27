@@ -1,40 +1,25 @@
-# Auto-generated __init__.py
-"""
-RAG vector package.
-
-Exports:
-- PersistedInMemorySearch: tiny file-backed/memory-backed vector store
-"""
-from .persisted_inmemory_search import PersistedInMemorySearch
-
-__all__ = ["PersistedInMemorySearch"]
-__version__ = "0.1.0"
-# Add to backend/app/features/rag_chatbot/vector/__init__.py:
-
-
-
 # backend/app/features/rag_chatbot/vector/__init__.py
 """
-Vector module initialization with safe imports.
+Exports a stable ComprehensiveSearchSystem symbol so both the editor (Pylance)
+and runtime can resolve it, regardless of which implementation is available.
 """
 
-# Safe imports with fallbacks
+# Try the "full" implementation first
 try:
-    from .enhanced_vector_client import EnhancedVectorDatabaseClient, create_vector_client
-except ImportError:
-    EnhancedVectorDatabaseClient = None
-    create_vector_client = None
-
-
-try:
-    from .sophisticated_embedding_system import SophisticatedEmbeddingSystem
-except ImportError:
-    SophisticatedEmbeddingSystem = None
-
-# Export available components
-__all__ = [
-    'EnhancedVectorDatabaseClient',
-    'create_vector_client', 
-    'PersistedInMemorySearch',
-    'SophisticatedEmbeddingSystem'
-]
+    from .integrated_search_system import ComprehensiveSearchSystem  # type: ignore[attr-defined]
+    __all__ = ["ComprehensiveSearchSystem"]
+except Exception:
+    # Fall back to the simpler implementation if the full one isn't present/ready
+    try:
+        from .simple_integrated_search import SimpleIntegratedSearch as ComprehensiveSearchSystem
+        __all__ = ["ComprehensiveSearchSystem"]
+    except Exception:
+        # Final safety shim so Pylance stops complaining; will raise at use-time if called.
+        class ComprehensiveSearchSystem:  # type: ignore[no-redef]
+            def __init__(self, *a, **kw):
+                raise ImportError(
+                    "No search implementation available. "
+                    "Ensure integrated_search_system.py or simple_integrated_search.py is present "
+                    "and imports succeed."
+                )
+        __all__ = ["ComprehensiveSearchSystem"]

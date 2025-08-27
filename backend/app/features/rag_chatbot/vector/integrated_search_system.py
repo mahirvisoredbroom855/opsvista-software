@@ -182,3 +182,14 @@ class SimpleSearchInterface:
 # Aliases so different import styles work
 IntegratedSearchManager = SimpleSearchInterface
 IntegratedSearchSystem = SimpleSearchInterface
+
+
+# Compatibility alias for older imports
+try:
+    ComprehensiveSearchSystem
+except NameError:
+    # If the real class is IntegratedSearchSystem, alias it:
+    try:
+        ComprehensiveSearchSystem = IntegratedSearchSystem  # type: ignore
+    except NameError:
+        pass

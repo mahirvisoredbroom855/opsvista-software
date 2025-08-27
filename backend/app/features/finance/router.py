@@ -1,502 +1,503 @@
+# backend/app/features/finance/router.py
+from __future__ import annotations
 
-# Finance Feature API Router
+import os
+import uuid
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
-from sqlalchemy import func, and_, or_, desc
-from typing import List, Optional
-from datetime import date, datetime, timedelta
-import uuid
 
-# Import our schemas and models
-from .schemas import (
-    FinanceTransactionCreateRequest, FinanceTransactionResponse,
-    FileProcessingTriggerRequest, FileProcessingStatusResponse,
-    FinanceQueryRequest, PaginatedFinanceResponse,
-    DashboardMetricsResponse, HealthCheckResponse,
-    ErrorResponse, ManualSyncRequest
-)
-from .models import FactFinance, RawDriveFinance, FinanceSummary, FinanceFileProcessing
+# --- Auth / Clients ---------------------------------------------------------
+# Your project already exposes these:
+#   - app.core.auth_deps.get_current_user
+#   - app.core.supabase_client.supabase / service_supabase
+try:
+    from app.core.auth_deps import get_current_user
+except Exception as e:
+    # Keep import errors readable during early bring-up
+    raise RuntimeError(f"finance.router: auth import failed: {e}")
 
-# Import core dependencies (you'll need to adjust these imports based on your core structure)
-from app.core.supabase_client import get_supabase_session  # Adjust import path
-from app.core.auth_deps import get_current_user  # Adjust import path
+try:
+    from app.core.supabase_client import supabase, service_supabase
+except Exception as e:
+    raise RuntimeError(f"finance.router: supabase client import failed: {e}")
 
-# Create router
+# --- Optional schemas: prefer your existing ones; define minimal fallbacks ---
+try:
+    from .schemas import (
+        FinanceTransactionCreateRequest,
+        FinanceTransactionResponse,
+        FinanceQueryRequest,
+        PaginatedFinanceResponse,
+        DashboardMetricsResponse,
+        FileProcessingTriggerRequest,
+        FileProcessingStatusResponse,
+        ManualSyncRequest,
+        HealthCheckResponse,
+    )
+except Exception:
+    # Fallback minimal Pydantic models so imports never explode
+    from pydantic import BaseModel, Field
+    class FinanceTransactionCreateRequest(BaseModel):
+        transaction_date: date
+        transaction_type: str
+        amount_bdt: Optional[float] = None
+        amount_usd: Optional[float] = None
+        party_name: Optional[str] = None
+        vendor_supplier: Optional[str] = None
+        description: Optional[str] = None
+        transaction_category: Optional[str] = None
+        bill_reference: Optional[str] = None
+
+    class FinanceTransactionResponse(BaseModel):
+        finance_id: uuid.UUID
+        transaction_date: date
+        transaction_type: str
+        amount_bdt: Optional[float] = None
+        amount_usd: Optional[float] = None
+        amount_original: Optional[float] = None
+        currency_original: Optional[str] = None
+        party_name: Optional[str] = None
+        vendor_supplier: Optional[str] = None
+        bill_reference: Optional[str] = None
+        transaction_category: Optional[str] = None
+        description: Optional[str] = None
+        amount_due: Optional[float] = None
+        is_active: bool = True
+        created_by: Optional[str] = None
+        loaded_at: Optional[datetime] = None
+        updated_at: Optional[datetime] = None
+
+    class FinanceQueryRequest(BaseModel):
+        start_date: Optional[date] = None
+        end_date: Optional[date] = None
+        transaction_type: Optional[str] = None
+        party_name: Optional[str] = None
+        limit: int = 100
+        offset: int = 0
+
+    class PaginatedFinanceResponse(BaseModel):
+        data: List[FinanceTransactionResponse]
+        total_count: int
+        page_size: int
+        current_offset: int
+        has_next: bool
+        has_previous: bool
+
+    class DashboardMetricsResponse(BaseModel):
+        today_cash_received: float
+        today_expenses: float
+        today_net_flow: float
+        month_cash_received: float
+        month_expenses: float
+        month_net_flow: float
+        prev_month_cash_received: float
+        prev_month_expenses: float
+        month_cash_growth_percent: float
+        month_expense_growth_percent: float
+        days_in_month: int
+        days_passed: int
+        days_remaining: int
+        month_progress_percent: float
+        year_revenue: float
+        year_expenditure: float
+        year_profit_loss: float
+        total_outstanding_bills: float
+        recent_file_count: int
+        processing_errors_count: int
+        last_sync_time: Optional[datetime] = None
+
+    class FileProcessingTriggerRequest(BaseModel):
+        file_name: str
+        file_type: Optional[str] = "unknown"
+        force_reprocess: bool = False
+
+    class FileProcessingStatusResponse(BaseModel):
+        id: Optional[int] = None
+        source_file: str
+        file_type: str = "unknown"
+        status: str = "pending"
+        rows_processed: Optional[int] = 0
+        rows_successful: Optional[int] = 0
+        rows_failed: Optional[int] = 0
+        processing_started: Optional[datetime] = None
+        processing_completed: Optional[datetime] = None
+        created_at: Optional[datetime] = None
+
+    class ManualSyncRequest(BaseModel):
+        sync_type: str = Field("full", pattern="^(full|incremental)$")
+
+    class HealthCheckResponse(BaseModel):
+        status: str
+        database_connection: bool
+        google_drive_connection: bool
+        services: Dict[str, bool]
+        last_sync_time: Optional[datetime] = None
+        pending_files: int = 0
+        processing_errors: int = 0
+
+# --- Env / feature gating ---------------------------------------------------
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+FINANCE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
+
 router = APIRouter(prefix="/api/v1/finance", tags=["Finance"])
 
-# Dependency to get database session
-def get_db():
-    """Get database session - adjust this based on your setup"""
-    # This is a placeholder - adjust based on your actual database setup
-    session = get_supabase_session()
-    try:
-        yield session
-    finally:
-        session.close()
+def _require_finance() -> None:
+    if not FINANCE_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail="Finance API disabled: set SUPABASE_URL and SUPABASE_SERVICE_KEY."
+        )
 
-# =====================================
-# Health Check & Status Endpoints
-# =====================================
+def _supabase_table(name: str):
+    # Prefer service client for writes; user client for reads would also work.
+    return service_supabase.table(name)
 
+# ============================================================================
+# Health
+# ============================================================================
 @router.get("/health", response_model=HealthCheckResponse)
-async def health_check(db: Session = Depends(get_db)):
-    """Check system health and status"""
-    try:
-        # Test database connection
-        db.execute("SELECT 1")
-        db_connected = True
-    except Exception:
-        db_connected = False
-    
-    # Check recent processing activity
-    try:
-        pending_count = db.query(FinanceFileProcessing).filter(
-            FinanceFileProcessing.status == 'pending'
-        ).count()
-        
-        error_count = db.query(FinanceFileProcessing).filter(
-            FinanceFileProcessing.status == 'failed'
-        ).count()
-        
-        last_sync = db.query(FinanceFileProcessing.processing_completed).filter(
-            FinanceFileProcessing.status == 'completed'
-        ).order_by(desc(FinanceFileProcessing.processing_completed)).first()
-        
-    except Exception:
-        pending_count = 0
-        error_count = 0
-        last_sync = None
-    
+async def health_check() -> HealthCheckResponse:
+    db_ok = False
+    pending = 0
+    errors = 0
+    last_sync: Optional[datetime] = None
+
+    if FINANCE_ENABLED:
+        try:
+            # cheap “ping”: count exact with limit 1
+            _ = _supabase_table("fact_finance").select("finance_id", count="exact").limit(1).execute()
+            db_ok = True
+        except Exception:
+            db_ok = False
+
+        try:
+            res = _supabase_table("finance_file_processing").select(
+                "status,processing_completed,created_at", count="exact"
+            ).order("created_at", desc=True).limit(200).execute()
+
+            rows = res.data or []
+            pending = sum(1 for r in rows if (r.get("status") or "").lower() == "pending")
+            errors = sum(1 for r in rows if (r.get("status") or "").lower() == "failed")
+            # find the last completed timestamp
+            comp = [r.get("processing_completed") for r in rows if (r.get("status") or "").lower() == "completed"]
+            if comp:
+                # supabase returns iso strings
+                last_sync = datetime.fromisoformat(comp[0].replace("Z", "+00:00"))
+        except Exception:
+            pass
+
     return HealthCheckResponse(
-        status="healthy" if db_connected else "unhealthy",
-        database_connection=db_connected,
-        google_drive_connection=True,  # TODO: Actually test Google Drive
-        services={
-            "database": db_connected,
-            "google_drive": True,
-            "background_tasks": True
-        },
-        last_sync_time=last_sync[0] if last_sync else None,
-        pending_files=pending_count,
-        processing_errors=error_count
+        status="healthy" if db_ok else "unhealthy",
+        database_connection=db_ok,
+        google_drive_connection=True,  # you can wire a real check later
+        services={"database": db_ok, "google_drive": True, "background_tasks": True},
+        last_sync_time=last_sync,
+        pending_files=pending,
+        processing_errors=errors,
     )
 
-# =====================================
-# Transaction CRUD Endpoints
-# =====================================
-
+# ============================================================================
+# Transactions (Supabase)
+# ============================================================================
 @router.post("/transactions", response_model=FinanceTransactionResponse)
 async def create_transaction(
     request: FinanceTransactionCreateRequest,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)  # Require authentication
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Create new finance transaction"""
+    _require_finance()
     try:
-        # Create new transaction record
-        db_transaction = FactFinance(
-            transaction_date=request.transaction_date,
-            transaction_type=request.transaction_type,
-            amount_bdt=request.amount_bdt,
-            amount_usd=request.amount_usd,
-            amount_original=request.amount_bdt or request.amount_usd,
-            currency_original='BDT' if request.amount_bdt else 'USD',
-            party_name=request.party_name,
-            vendor_supplier=request.vendor_supplier,
-            description=request.description,
-            transaction_category=request.transaction_category,
-            bill_reference=request.bill_reference,
-            created_by=current_user.get('email', 'system') if current_user else 'system'
-        )
-        
-        db.add(db_transaction)
-        db.commit()
-        db.refresh(db_transaction)
-        
-        return db_transaction
-        
+        payload = {
+            "transaction_date": request.transaction_date.isoformat(),
+            "transaction_type": request.transaction_type,
+            "amount_bdt": request.amount_bdt,
+            "amount_usd": request.amount_usd,
+            "amount_original": request.amount_bdt or request.amount_usd,
+            "currency_original": "BDT" if request.amount_bdt else ("USD" if request.amount_usd else None),
+            "party_name": request.party_name,
+            "vendor_supplier": request.vendor_supplier,
+            "description": request.description,
+            "transaction_category": request.transaction_category,
+            "bill_reference": request.bill_reference,
+            "created_by": current_user.get("email") or "system",
+            "is_active": True,
+        }
+        res = _supabase_table("fact_finance").insert(payload).execute()
+        if not res.data:
+            raise RuntimeError("Insert returned no data")
+        return res.data[0]
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create transaction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create: {e}")
 
 @router.get("/transactions", response_model=PaginatedFinanceResponse)
 async def get_transactions(
-    start_date: Optional[date] = Query(None, description="Filter from date"),
-    end_date: Optional[date] = Query(None, description="Filter to date"),
-    transaction_type: Optional[str] = Query(None, description="Filter by type"),
-    party_name: Optional[str] = Query(None, description="Filter by party"),
-    limit: int = Query(100, ge=1, le=1000, description="Results per page"),
-    offset: int = Query(0, ge=0, description="Results to skip"),
-    db: Session = Depends(get_db)
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    transaction_type: Optional[str] = Query(None),
+    party_name: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
 ):
-    """Get finance transactions with filtering and pagination"""
+    _require_finance()
     try:
-        # Build query with filters
-        query = db.query(FactFinance).filter(FactFinance.is_active == True)
-        
+        q = _supabase_table("fact_finance").select("*", count="exact").eq("is_active", True)
+
         if start_date:
-            query = query.filter(FactFinance.transaction_date >= start_date)
-        
+            q = q.gte("transaction_date", start_date.isoformat())
         if end_date:
-            query = query.filter(FactFinance.transaction_date <= end_date)
-        
+            q = q.lte("transaction_date", end_date.isoformat())
         if transaction_type:
-            query = query.filter(FactFinance.transaction_type == transaction_type)
-        
+            q = q.eq("transaction_type", transaction_type)
         if party_name:
-            query = query.filter(FactFinance.party_name.ilike(f"%{party_name}%"))
-        
-        # Get total count before pagination
-        total_count = query.count()
-        
-        # Apply pagination and ordering
-        transactions = query.order_by(desc(FactFinance.transaction_date)).offset(offset).limit(limit).all()
-        
-        return PaginatedFinanceResponse(
-            data=transactions,
-            total_count=total_count,
-            page_size=limit,
-            current_offset=offset,
-            has_next=offset + limit < total_count,
-            has_previous=offset > 0
-        )
-        
+            # ILIKE available via PostgREST filter
+            q = q.ilike("party_name", f"%{party_name}%")
+
+        q = q.order("transaction_date", desc=True).range(offset, offset + limit - 1)
+        res = q.execute()
+        data = res.data or []
+        total = res.count or 0
+
+        return {
+            "data": data,
+            "total_count": total,
+            "page_size": limit,
+            "current_offset": offset,
+            "has_next": (offset + limit) < total,
+            "has_previous": offset > 0,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch transactions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch: {e}")
 
 @router.get("/transactions/{transaction_id}", response_model=FinanceTransactionResponse)
-async def get_transaction(
-    transaction_id: uuid.UUID,
-    db: Session = Depends(get_db)
-):
-    """Get specific transaction by ID"""
-    transaction = db.query(FactFinance).filter(
-        FactFinance.finance_id == transaction_id,
-        FactFinance.is_active == True
-    ).first()
-    
-    if not transaction:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    return transaction
+async def get_transaction(transaction_id: uuid.UUID):
+    _require_finance()
+    try:
+        res = _supabase_table("fact_finance").select("*").eq("finance_id", str(transaction_id)).limit(1).execute()
+        rows = (res.data or [])
+        if not rows:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+        return rows[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch: {e}")
 
 @router.put("/transactions/{transaction_id}", response_model=FinanceTransactionResponse)
 async def update_transaction(
     transaction_id: uuid.UUID,
     request: FinanceTransactionCreateRequest,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Update existing transaction"""
+    _require_finance()
     try:
-        transaction = db.query(FactFinance).filter(
-            FactFinance.finance_id == transaction_id,
-            FactFinance.is_active == True
-        ).first()
-        
-        if not transaction:
+        payload = {
+            "transaction_date": request.transaction_date.isoformat(),
+            "transaction_type": request.transaction_type,
+            "amount_bdt": request.amount_bdt,
+            "amount_usd": request.amount_usd,
+            "party_name": request.party_name,
+            "vendor_supplier": request.vendor_supplier,
+            "description": request.description,
+            "transaction_category": request.transaction_category,
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        res = _supabase_table("fact_finance").update(payload).eq("finance_id", str(transaction_id)).execute()
+        rows = res.data or []
+        if not rows:
             raise HTTPException(status_code=404, detail="Transaction not found")
-        
-        # Update fields
-        transaction.transaction_date = request.transaction_date
-        transaction.transaction_type = request.transaction_type
-        transaction.amount_bdt = request.amount_bdt
-        transaction.amount_usd = request.amount_usd
-        transaction.party_name = request.party_name
-        transaction.description = request.description
-        transaction.transaction_category = request.transaction_category
-        # updated_at will be set automatically by trigger
-        
-        db.commit()
-        db.refresh(transaction)
-        
-        return transaction
-        
+        return rows[0]
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update transaction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update: {e}")
 
 @router.delete("/transactions/{transaction_id}")
 async def delete_transaction(
     transaction_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Soft delete transaction (set is_active = False)"""
+    _require_finance()
     try:
-        transaction = db.query(FactFinance).filter(
-            FactFinance.finance_id == transaction_id,
-            FactFinance.is_active == True
-        ).first()
-        
-        if not transaction:
+        res = _supabase_table("fact_finance").update({"is_active": False}).eq("finance_id", str(transaction_id)).execute()
+        if not (res.data or []):
             raise HTTPException(status_code=404, detail="Transaction not found")
-        
-        # Soft delete
-        transaction.is_active = False
-        db.commit()
-        
         return {"message": "Transaction deleted successfully"}
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete transaction: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete: {e}")
 
-# =====================================
-# Dashboard & Analytics Endpoints
-# =====================================
-
+# ============================================================================
+# Dashboard / metrics (Supabase aggregation)
+# ============================================================================
 @router.get("/dashboard/metrics", response_model=DashboardMetricsResponse)
-async def get_dashboard_metrics(db: Session = Depends(get_db)):
-    """Generate real-time dashboard metrics with monthly totals"""
-    
-    # 1. Calculate date ranges
+async def dashboard_metrics():
+    _require_finance()
     today = date.today()
-    month_start = today.replace(day=1)  # First day of current month
-    year_start = today.replace(month=1, day=1)  # January 1st
-    
-    # Previous month for comparison
+    month_start = today.replace(day=1)
+    year_start = today.replace(month=1, day=1)
+
+    def _sum_between(kind: str, start: date, end: date) -> float:
+        q = (
+            _supabase_table("fact_finance")
+            .select("amount_bdt", count="exact")
+            .eq("is_active", True)
+            .eq("transaction_type", kind)
+            .gte("transaction_date", start.isoformat())
+            .lte("transaction_date", end.isoformat())
+        )
+        res = q.execute()
+        vals = [row.get("amount_bdt") or 0 for row in (res.data or [])]
+        return float(sum(vals))
+
+    def _sum_today(kind: str) -> float:
+        return _sum_between(kind, today, today)
+
+    def _sum_outstanding_due() -> float:
+        res = (
+            _supabase_table("fact_finance")
+            .select("amount_due", count="exact")
+            .eq("is_active", True)
+            .eq("transaction_type", "due_bill")
+            .gt("amount_due", 0)
+            .execute()
+        )
+        vals = [row.get("amount_due") or 0 for row in (res.data or [])]
+        return float(sum(vals))
+
+    # today
+    today_cash = _sum_today("cash_receipt")
+    today_exp = _sum_today("expense")
+
+    # month
+    month_cash = _sum_between("cash_receipt", month_start, today)
+    month_exp = _sum_between("expense", month_start, today)
+
+    # prev month window
     if today.month == 1:
-        prev_month_start = date(today.year - 1, 12, 1)
-        prev_month_end = date(today.year - 1, 12, 31)
+        prev_start = date(today.year - 1, 12, 1)
+        prev_end = date(today.year - 1, 12, 31)
     else:
-        prev_month_start = date(today.year, today.month - 1, 1)
-        # Last day of previous month
-        prev_month_end = (month_start - timedelta(days=1))
-    
-    print(f"📊 Calculating metrics for:")
-    print(f"   Today: {today}")
-    print(f"   This Month: {month_start} to {today}")
-    print(f"   Previous Month: {prev_month_start} to {prev_month_end}")
-    
-    # 2. TODAY'S METRICS (unchanged)
-    today_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date == today,
-        FactFinance.transaction_type == 'cash_receipt',
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    today_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date == today,
-        FactFinance.transaction_type == 'expense',
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    # 3. THIS MONTH'S METRICS (NEW)
-    month_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date >= month_start,
-        FactFinance.transaction_date <= today,
-        FactFinance.transaction_type == 'cash_receipt',
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    month_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date >= month_start,
-        FactFinance.transaction_date <= today,
-        FactFinance.transaction_type == 'expense',
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    # 4. PREVIOUS MONTH'S METRICS (for comparison)
-    prev_month_cash = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date >= prev_month_start,
-        FactFinance.transaction_date <= prev_month_end,
-        FactFinance.transaction_type == 'cash_receipt',
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    prev_month_expenses = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date >= prev_month_start,
-        FactFinance.transaction_date <= prev_month_end,
-        FactFinance.transaction_type == 'expense',
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    # 5. YEAR METRICS (unchanged)
-    year_revenue = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date >= year_start,
-        FactFinance.transaction_date <= today,
-        FactFinance.transaction_type.in_(['cash_receipt']),
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    year_expenditure = db.query(func.coalesce(func.sum(FactFinance.amount_bdt), 0)).filter(
-        FactFinance.transaction_date >= year_start,
-        FactFinance.transaction_date <= today,
-        FactFinance.transaction_type.in_(['expense']),
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    # 6. OUTSTANDING BILLS (unchanged)
-    outstanding_bills = db.query(func.coalesce(func.sum(FactFinance.amount_due), 0)).filter(
-        FactFinance.transaction_type == 'due_bill',
-        FactFinance.amount_due > 0,
-        FactFinance.is_active == True
-    ).scalar() or 0
-    
-    # 7. OPERATIONAL METRICS (unchanged)
-    recent_files = db.query(FinanceFileProcessing).filter(
-        FinanceFileProcessing.created_at >= datetime.now() - timedelta(days=7)
-    ).count()
-    
-    processing_errors = db.query(FinanceFileProcessing).filter(
-        FinanceFileProcessing.status == 'failed'
-    ).count()
-    
-    # 8. CALCULATE PERCENTAGES AND COMPARISONS
-    # Month-over-month growth
-    month_cash_growth = 0
-    if prev_month_cash > 0:
-        month_cash_growth = ((month_cash - prev_month_cash) / prev_month_cash) * 100
-    
-    month_expense_growth = 0
-    if prev_month_expenses > 0:
-        month_expense_growth = ((month_expenses - prev_month_expenses) / prev_month_expenses) * 100
-    
-    # Days remaining in month
+        prev_start = date(today.year, today.month - 1, 1)
+        prev_end = month_start - timedelta(days=1)
+
+    prev_cash = _sum_between("cash_receipt", prev_start, prev_end)
+    prev_exp = _sum_between("expense", prev_start, prev_end)
+
+    # year
+    year_rev = _sum_between("cash_receipt", year_start, today)
+    year_exp = _sum_between("expense", year_start, today)
+
+    # month progress
     import calendar
-    days_in_month = calendar.monthrange(today.year, today.month)[1]
-    days_passed = today.day
-    days_remaining = days_in_month - days_passed
-    
-    # 9. BUILD RESPONSE WITH NEW MONTHLY FIELDS
+    dim = calendar.monthrange(today.year, today.month)[1]
+    passed = today.day
+    remaining = dim - passed
+
+    cash_growth = ((month_cash - prev_cash) / prev_cash * 100.0) if prev_cash > 0 else 0.0
+    exp_growth = ((month_exp - prev_exp) / prev_exp * 100.0) if prev_exp > 0 else 0.0
+
+    # operational signals (best-effort)
+    recent_files = 0
+    errors = 0
+    try:
+        seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat() + "Z"
+        res = (
+            _supabase_table("finance_file_processing")
+            .select("status,created_at", count="exact")
+            .gte("created_at", seven_days_ago)
+            .execute()
+        )
+        rows = res.data or []
+        recent_files = len(rows)
+        errors = sum(1 for r in rows if (r.get("status") or "").lower() == "failed")
+    except Exception:
+        pass
+
     return DashboardMetricsResponse(
-        # Today's metrics
         today_cash_received=float(today_cash),
-        today_expenses=float(today_expenses),
-        today_net_flow=float(today_cash - today_expenses),
-        
-        # Monthly metrics (NEW)
+        today_expenses=float(today_exp),
+        today_net_flow=float(today_cash - today_exp),
         month_cash_received=float(month_cash),
-        month_expenses=float(month_expenses),
-        month_net_flow=float(month_cash - month_expenses),
-        
-        # Monthly comparisons (NEW)
-        prev_month_cash_received=float(prev_month_cash),
-        prev_month_expenses=float(prev_month_expenses),
-        month_cash_growth_percent=float(month_cash_growth),
-        month_expense_growth_percent=float(month_expense_growth),
-        
-        # Month progress (NEW)
-        days_in_month=days_in_month,
-        days_passed=days_passed,
-        days_remaining=days_remaining,
-        month_progress_percent=float((days_passed / days_in_month) * 100),
-        
-        # Yearly metrics (unchanged)
-        year_revenue=float(year_revenue),
-        year_expenditure=float(year_expenditure),
-        year_profit_loss=float(year_revenue - year_expenditure),
-        
-        # Outstanding and operational (unchanged)
-        total_outstanding_bills=float(outstanding_bills),
+        month_expenses=float(month_exp),
+        month_net_flow=float(month_cash - month_exp),
+        prev_month_cash_received=float(prev_cash),
+        prev_month_expenses=float(prev_exp),
+        month_cash_growth_percent=float(cash_growth),
+        month_expense_growth_percent=float(exp_growth),
+        days_in_month=dim,
+        days_passed=passed,
+        days_remaining=remaining,
+        month_progress_percent=float(passed / dim * 100.0),
+        year_revenue=float(year_rev),
+        year_expenditure=float(year_exp),
+        year_profit_loss=float(year_rev - year_exp),
+        total_outstanding_bills=_sum_outstanding_due(),
         recent_file_count=recent_files,
-        processing_errors_count=processing_errors,
-        last_sync_time=datetime.now()
+        processing_errors_count=errors,
+        last_sync_time=datetime.utcnow(),
     )
 
-# =====================================
-# File Processing Endpoints
-# =====================================
-
+# ============================================================================
+# File processing stubs (wire your background worker later)
+# ============================================================================
 @router.post("/files/process", response_model=FileProcessingStatusResponse)
 async def trigger_file_processing(
     request: FileProcessingTriggerRequest,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Trigger processing of specific Excel file"""
+    _require_finance()
+    # stub record; you can insert into finance_file_processing table
     try:
-        # Check if file already processed (unless force_reprocess)
-        if not request.force_reprocess:
-            existing = db.query(FinanceFileProcessing).filter(
-                FinanceFileProcessing.source_file == request.file_name,
-                FinanceFileProcessing.status == 'completed'
-            ).first()
-            
-            if existing:
-                raise HTTPException(
-                    status_code=409, 
-                    detail=f"File {request.file_name} already processed. Use force_reprocess=true to reprocess."
-                )
-        
-        # Create processing record
-        processing_record = FinanceFileProcessing(
-            source_file=request.file_name,
-            file_type=request.file_type or 'unknown',
-            status='pending'
-        )
-        
-        db.add(processing_record)
-        db.commit()
-        db.refresh(processing_record)
-        
-        # Add to background processing queue
-        # background_tasks.add_task(process_excel_file, request.file_name, processing_record.id)
-        
-        return processing_record
-        
-    except HTTPException:
-        raise
+        row = {
+            "source_file": request.file_name,
+            "file_type": request.file_type or "unknown",
+            "status": "pending" if not request.force_reprocess else "reprocess",
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
+        res = _supabase_table("finance_file_processing").insert(row).execute()
+        return (res.data or [row])[0]
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to trigger file processing: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger processing: {e}")
 
 @router.get("/files/processing", response_model=List[FileProcessingStatusResponse])
 async def get_file_processing_status(
-    status: Optional[str] = Query(None, description="Filter by processing status"),
+    status: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
-    db: Session = Depends(get_db)
 ):
-    """Get file processing status"""
+    _require_finance()
     try:
-        query = db.query(FinanceFileProcessing)
-        
+        q = _supabase_table("finance_file_processing").select("*").order("created_at", desc=True).limit(limit)
         if status:
-            query = query.filter(FinanceFileProcessing.status == status)
-        
-        processing_records = query.order_by(desc(FinanceFileProcessing.created_at)).limit(limit).all()
-        
-        return processing_records
-        
+            q = q.eq("status", status)
+        res = q.execute()
+        return res.data or []
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch processing status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch status: {e}")
 
 @router.post("/sync/manual")
 async def trigger_manual_sync(
     request: ManualSyncRequest,
     background_tasks: BackgroundTasks,
-    current_user = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """Trigger manual Google Drive sync"""
-    try:
-        # TODO: Implement actual Google Drive sync logic
-        # background_tasks.add_task(sync_google_drive, request.sync_type)
-        
-        return {
-            "message": f"Manual {request.sync_type} sync triggered successfully",
-            "sync_type": request.sync_type,
-            "triggered_at": datetime.now().isoformat(),
-            "triggered_by": current_user.get('email', 'system') if current_user else 'system'
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to trigger sync: {str(e)}")
+    _require_finance()
+    # Hook your real sync job here
+    return {
+        "message": f"Manual {request.sync_type} sync requested",
+        "sync_type": request.sync_type,
+        "triggered_at": datetime.utcnow().isoformat() + "Z",
+        "triggered_by": current_user.get("email") or "system",
+    }
 
-# =====================================
-# Error Handler
-# =====================================
-
-@router.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    """General exception handler for finance routes"""
-    return JSONResponse(
-        status_code=500,
-        content=ErrorResponse(
-            error="internal_server_error",
-            message="An unexpected error occurred",
-            details={"exception": str(exc)}
-        ).dict()
-    )
+# NOTE:
+# - No @router.exception_handler usage here (that belongs on FastAPI app, not a router).
+# - If you later add SQLAlchemy, you can branch on DATABASE_URL and use ORM instead.

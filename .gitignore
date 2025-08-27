@@ -1,5 +1,12 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
+# 🔒 Absolute no-commit zone
+.env
+.env.*
+frontend/.env*
+backend/credentials/
+**/google_credentials.json
+*.pem
+*.p12
+
 # macOS
 .DS_Store
 
@@ -49,7 +56,7 @@ pnpm-debug.log*
 # Data dumps / scratch
 tmp/
 
-=======
+
 # Python
 __pycache__/
 *.py[cod]
@@ -86,8 +93,7 @@ dump.rdb
 
 # Celery
 celerybeat-schedule
->>>>>>> origin/feat/finances-dashboard
-=======
+
 __pycache__/
 *.pyc
 *.pyo
@@ -95,5 +101,3 @@ __pycache__/
 .env*
 __pycache__/
 *.pyc
->>>>>>> origin/feat/task-assignment
-backend/credentials/
