@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # APP
     # -------------------------------------------------------------------------
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    EMBEDDING_DIM: int = 1536  # <- single authority
+    USE_MOCK_EMBEDDINGS: bool = False
     APP_NAME: str = Field(default="OpsVista Business Intelligence System")
     APP_VERSION: str = Field(default="1.0.0")
     ENVIRONMENT: str = Field(default="development")  # development|staging|production
@@ -130,6 +133,8 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = Field(default="text-embedding-3-small")
     OPENAI_MAX_TOKENS: int = Field(default=4000, ge=100, le=8000)
     OPENAI_TEMPERATURE: float = Field(default=0.7, ge=0.0, le=2.0)
+    EMBEDDING_DIM: int = 1536  # <- single authority
+    USE_MOCK_EMBEDDINGS: bool = False
 
     # -------------------------------------------------------------------------
     # EMAIL (Resend)

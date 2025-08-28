@@ -16,6 +16,10 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
+from typing import Sequence
+import numpy as np
+from app.core.config import settings
+
 try:
     import asyncpg
 except ImportError:
@@ -32,6 +36,24 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# --- add near the top, after imports ---
+
+
+
+def ensure_embedding_dim(vec: Sequence[float], what: str = "embedding") -> np.ndarray:
+    """
+    Ensure a 1-D float32 vector with the exact dimension settings.EMBEDDING_DIM.
+    Raises ValueError with a clear message when mismatch occurs.
+    """
+    arr = np.asarray(vec, dtype=np.float32).reshape(-1)
+    expected = int(getattr(settings, "EMBEDDING_DIM", 1536))
+    if arr.shape[0] != expected:
+        model_name = getattr(settings, "OPENAI_EMBEDDING_MODEL", "unknown")
+        raise ValueError(
+            f"{what} has dim {arr.shape[0]} but expected {expected} "
+            f"(OPENAI_EMBEDDING_MODEL={model_name})."
+        )
+    return arr
 
 def _normalize_dsn(url: Optional[str]) -> str:
     """Convert SQLAlchemy URL schemes to asyncpg-friendly DSNs."""

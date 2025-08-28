@@ -2,225 +2,217 @@
 from __future__ import annotations
 
 import logging
-import sys
+import os
 from pathlib import Path
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import RedirectResponse
 
-# Configure logging
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("opsvista.main")
 
-# Global variable to store startup results
-startup_results = {}
+# -----------------------------------------------------------------------------
+# Globals
+# -----------------------------------------------------------------------------
+startup_results: dict = {}
 
+# Resolve important paths relative to this file so both run modes work:
+# - repo root:   uvicorn --app-dir backend app.main:app
+# - backend/:    uvicorn app.main:app
+HERE = Path(__file__).parent
+VECTOR_DIR = HERE / "features" / "rag_chatbot" / "vector"
+STATIC_DIR = HERE / "static"
+
+# Fallbacks if someone runs from a different cwd
+ALT_VECTOR_JSON = Path("backend/app/features/rag_chatbot/vector/enhanced_index.json")
+
+ENHANCED_INDEX_CANDIDATES = [
+    VECTOR_DIR / "enhanced_index.json",
+    ALT_VECTOR_JSON,
+]
+
+def _find_enhanced_index() -> Path | None:
+    for p in ENHANCED_INDEX_CANDIDATES:
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            continue
+    return None
+
+def _cors_origins_from_env() -> list[str]:
+    """
+    CORS_ALLOWED_ORIGINS="https://your-frontend.vercel.app,https://example.com"
+    If not set, default to ["*"] for dev; tighten in prod.
+    """
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        return ["*"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+# -----------------------------------------------------------------------------
+# Lifespan
+# -----------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager for startup and shutdown events."""
-    
-    # Startup
-    logger.info("Starting OpsVista application...")
-    
+    logger.info("Starting OpsVista application…")
     try:
-        # Simple chat system initialization - no Google Drive integration needed
-        logger.info("Initializing RAG Chat System with enhanced index...")
-        
-        # Just verify the enhanced index exists
-        index_paths = [
-            "backend/app/features/rag_chatbot/vector/enhanced_index.json",
-            "app/features/rag_chatbot/vector/enhanced_index.json"
-        ]
-        
-        index_found = False
-        for index_path in index_paths:
-            if Path(index_path).exists():
-                index_found = True
-                logger.info(f"Enhanced index found: {index_path}")
-                startup_results['chat_system'] = {
-                    "status": "ready",
-                    "message": f"Chat system ready with enhanced index at {index_path}",
-                    "index_path": index_path
-                }
-                break
-        
-        if not index_found:
-            logger.warning("Enhanced index not found - chat system will use fallback")
-            startup_results['chat_system'] = {
+        # Minimal, non-failing startup checks (no external calls)
+        idx = _find_enhanced_index()
+        if idx:
+            startup_results["chat_system"] = {
+                "status": "ready",
+                "message": f"Enhanced index found",
+                "index_path": str(idx),
+            }
+            logger.info("Enhanced index located at %s", idx)
+        else:
+            startup_results["chat_system"] = {
                 "status": "fallback",
                 "message": "No enhanced index found, using fallback search",
-                "suggestion": "Run gdrive_to_enhanced_index.py to create embeddings"
+                "suggestion": "Run gdrive_to_enhanced_index.py to create embeddings",
             }
-            
+            logger.warning("Enhanced index not found; starting in fallback mode")
     except Exception as e:
-        logger.error(f"Chat system initialization failed: {e}")
-        startup_results['chat_system'] = {"status": "failed", "error": str(e)}
-    
+        logger.exception("Chat system initialization failed")
+        startup_results["chat_system"] = {"status": "failed", "error": str(e)}
+
     logger.info("Application startup completed")
-    
     yield
-    
-    # Shutdown
-    logger.info("Shutting down OpsVista application...")
+    logger.info("Shutting down OpsVista application…")
     logger.info("Application shutdown completed")
 
-
+# -----------------------------------------------------------------------------
+# App factory
+# -----------------------------------------------------------------------------
 def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
-    
     app = FastAPI(
         title="OpsVista API",
         description="Business Intelligence System with RAG Chat",
         version="1.0.0",
         docs_url="/docs",
         redoc_url=None,
-        lifespan=lifespan
+        lifespan=lifespan,
     )
-    
-    # --- CORS (dev-friendly) ---
+
+    # --- CORS ---
+    allow_origins = _cors_origins_from_env()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # In production, specify actual origins
+        allow_origins=allow_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
-    # --- Static files (/static/chat.html) ---
-    static_dir = Path(__file__).parent / "static"
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-        logger.info(f"Static files mounted from {static_dir}")
-    
-    # --- Include routers (NO extra prefix; routers carry their own) ---
-    
-    # Chat API: /api/rag/chat/_retrieve and /api/rag/chat/complete
+    logger.info("CORS allow_origins=%s", allow_origins)
+
+    # --- Static files ---
+    if STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        logger.info("Static files mounted from %s", STATIC_DIR)
+
+    # --- Routers ---
+    # Try imports for both run modes. We prefer 'app.' path since tests do:
+    # from app.main import app
     try:
-        # When running from repo root: uvicorn backend.app.main:app
+        from app.features.rag_chatbot.api.chat import router as chat_router
+        logger.info("Imported chat router from app.features…")
+    except ModuleNotFoundError:
+        # Some run from repo root with different sys.path setups
         from backend.app.features.rag_chatbot.api.chat import router as chat_router
-        logger.info("Imported chat router from backend.app.features...")
-    except ModuleNotFoundError:
-        try:
-            # When running from backend/: uvicorn app.main:app
-            from app.features.rag_chatbot.api.chat import router as chat_router
-            logger.info("Imported chat router from app.features...")
-        except Exception as e:
-            logger.error(f"Failed to import chat router: {e}")
-            raise
-    
+        logger.info("Imported chat router from backend.app.features…")
+
     app.include_router(chat_router)
-    logger.info("Chat router included")
-    
-    # Optional: Discovery API if present
-    discovery_router = None
+    logger.info("Chat router included at /api/rag/chat/*")
+
+    # Optional discovery router
     try:
-        from backend.app.features.rag_chatbot.api.discovery import router as disc_router
-        discovery_router = disc_router
-        logger.info("Imported discovery router from backend.app.features...")
-    except ModuleNotFoundError:
-        try:
-            from app.features.rag_chatbot.api.discovery import router as disc_router
-            discovery_router = disc_router
-            logger.info("Imported discovery router from app.features...")
-        except Exception as e:
-            logger.warning(f"Discovery router not available: {e}")
-            discovery_router = None
-    
-    if discovery_router:
+        from app.features.rag_chatbot.api.discovery import router as discovery_router
         app.include_router(discovery_router)
         logger.info("Discovery router included")
-    
-    # --- Routes ---
-    
+    except ModuleNotFoundError:
+        try:
+            from backend.app.features.rag_chatbot.api.discovery import router as discovery_router  # type: ignore
+            app.include_router(discovery_router)
+            logger.info("Discovery router included (backend.* path)")
+        except Exception as e:
+            logger.info("Discovery router not available: %s", e)
+
+    # --- Convenience routes ---
     @app.get("/")
     async def root():
-        """Root endpoint - redirect to chat UI if available."""
-        # Redirect to the built-in chat UI if it exists; otherwise show a small message
-        if static_dir.exists() and (static_dir / "chat.html").exists():
+        """Redirect to chat UI if available, otherwise show a small message."""
+        if STATIC_DIR.exists() and (STATIC_DIR / "chat.html").exists():
             return RedirectResponse(url="/static/chat.html")
         return {
             "ok": True,
             "message": "OpsVista API is running",
             "docs": "/docs",
             "chat_api": "/api/rag/chat/complete",
-            "status": "/api/status"
+            "status": "/api/status",
         }
-    
+
     @app.get("/healthz")
     async def healthz():
-        """Health check endpoint."""
         return {"ok": True, "status": "healthy"}
-    
+
     @app.get("/api/status")
     async def api_status():
-        """Comprehensive API status."""
+        """Aggregate status without calling external services."""
         try:
-            # Get chat system status
-            chat_status = startup_results.get('chat_system', {"status": "unknown"})
-            
-            # Check enhanced index status
-            index_status = None
-            index_paths = [
-                "backend/app/features/rag_chatbot/vector/enhanced_index.json",
-                "app/features/rag_chatbot/vector/enhanced_index.json"
-            ]
-            
-            for index_path in index_paths:
-                if Path(index_path).exists():
-                    index_file = Path(index_path)
-                    index_status = {
-                        "path": index_path,
-                        "exists": True,
-                        "size_mb": round(index_file.stat().st_size / 1024 / 1024, 2),
-                        "modified": index_file.stat().st_mtime
-                    }
-                    break
-            
-            if not index_status:
-                index_status = {"exists": False, "message": "Enhanced index not found"}
-            
+            idx = _find_enhanced_index()
+            index_status = (
+                {
+                    "path": str(idx),
+                    "exists": True,
+                    "size_mb": round(idx.stat().st_size / 1024 / 1024, 2),
+                    "modified_epoch": idx.stat().st_mtime,
+                }
+                if idx
+                else {"exists": False, "message": "Enhanced index not found"}
+            )
+
             return {
                 "api_status": "operational",
-                "timestamp": "2025-08-22",
-                "chat_system": chat_status,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "chat_system": startup_results.get("chat_system", {"status": "unknown"}),
                 "enhanced_index": index_status,
                 "available_endpoints": {
-                    "chat": "/api/rag/chat/complete",
-                    "retrieve": "/api/rag/chat/_retrieve", 
-                    "docs": "/docs"
-                }
+                    "chat_complete": "/api/rag/chat/complete",
+                    "chat_retrieve": "/api/rag/chat/_retrieve",
+                    "chat_status": "/api/rag/chat/status",
+                    "docs": "/docs",
+                },
             }
-            
         except Exception as e:
-            logger.error(f"Status check failed: {e}")
+            logger.exception("Status check failed")
             return {
                 "api_status": "degraded",
                 "error": str(e),
-                "chat_system": startup_results.get('chat_system', {"status": "unknown"})
+                "chat_system": startup_results.get("chat_system", {"status": "unknown"}),
             }
-    
+
     return app
 
-
-# Create the FastAPI app instance
+# Public ASGI app
 app = create_app()
 
-
-# Additional configuration for development
 if __name__ == "__main__":
     import uvicorn
-    
-    # Development server configuration
     uvicorn.run(
-        "main:app",
+        "app.main:app",  # run from backend/: python -m uvicorn app.main:app --reload
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
     )
