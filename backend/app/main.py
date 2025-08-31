@@ -107,12 +107,17 @@ def create_app() -> FastAPI:
 
     # --- CORS ---
     allow_origins = _cors_origins_from_env()
+
+    explicit = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    allow_list = [o.strip() for o in explicit.split(",") if o.strip()]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=allow_origins,
+        allow_origins=allow_list,                 # explicit origins from env
+        allow_origin_regex=r"https://.*\.vercel\.app$",  # allow all Vercel previews + prod
         allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["*"],
+        allow_headers=["*"],  
     )
     logger.info("CORS allow_origins=%s", allow_origins)
 
