@@ -47,6 +47,7 @@
 - [Monitoring & Operations](#monitoring--operations)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
+- [Documentation](#documentation)
 - [License](#license)
 
 ---
@@ -54,6 +55,24 @@
 ## 🔍 Overview
 
 OpsVista is a production-ready **Retrieval-Augmented Generation (RAG)** platform designed to provide intelligent, contextual answers to natural language queries about internal organizational documentation. Built for Precision Textile Industry LTD, the system serves as a unified knowledge interface that consolidates scattered information sources into a searchable, citation-backed question-answering system.
+
+
+---
+## 📖 Documentation
+
+### Technical Documentation
+For comprehensive technical details, architectural decisions, and implementation guides, refer to the complete documentation:
+
+**[📄 OpsVista RAG System - Technical Documentation](https://drive.google.com/file/d/16Cxo0c8fKoGjLUDq32pXRK2-sEAt_p6S/view?usp=sharing)**
+
+*This document provides in-depth coverage of:*
+- Complete architectural design patterns
+- Business requirements and value proposition analysis
+- Detailed implementation workflows
+- Security framework and compliance guidelines
+- Operational procedures and best practices
+
+---
 
 ### Business Impact
 
