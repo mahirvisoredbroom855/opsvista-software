@@ -295,7 +295,7 @@ The Enhanced Index transforms documents into searchable vector representations s
 
 ### Index Build Pipeline
 <p align="center">
-  <img src="pictures/Index%20Build%20%2F%20Discovery%20Pipeline%20(Drive%20%E2%86%92%20Index).png" alt="Index Build Pipeline" width="72%">
+  <img src="pictures/Index%20Build%20Discovery%20Pipeline.png" alt="Index Build Pipeline" width="72%">
 </p>
 
 ### Trigger Methods
@@ -433,7 +433,7 @@ Content-Type: application/json
 
 ### Infrastructure Topology
 <p align="center">
-  <img src="pictures/Infrastructure%20%2F%20Runtime%20Topology.png" alt="Infrastructure Topology" width="80%">
+  <img src="pictures/Infrastructure%20Runtime%20Topology.png" alt="Infrastructure Topology" width="80%">
 </p>
 
 ### Backend Deployment (Render)
