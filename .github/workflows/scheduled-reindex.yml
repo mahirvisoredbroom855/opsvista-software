@@ -1,0 +1,48 @@
+name: Scheduled Reindex
+
+# Keeps the knowledge base current without anyone remembering to click a
+# button. discover_documents() (backend/build_drive_index.py) does a full
+# Drive rescan each run — no incremental diffing — so a nightly cadence is
+# a deliberate cost/freshness tradeoff, not a limitation of this workflow.
+# Trigger a run manually anytime from the Actions tab (workflow_dispatch)
+# if you need fresher data sooner than the schedule.
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger reindex
+        id: trigger
+        run: |
+          http_code=$(curl -s -o response.json -w "%{http_code}" -X POST \
+            "${{ secrets.BACKEND_URL }}/api/rag/admin/reindex" \
+            -H "X-Automation-Token: ${{ secrets.REINDEX_AUTOMATION_TOKEN }}")
+          cat response.json
+          if [ "$http_code" != "200" ] && [ "$http_code" != "409" ]; then
+            echo "Unexpected status code: $http_code"
+            exit 1
+          fi
+
+      - name: Poll until the background reindex finishes
+        run: |
+          status="running"
+          for i in $(seq 1 60); do
+            sleep 15
+            body=$(curl -s "${{ secrets.BACKEND_URL }}/api/rag/admin/reindex/status" \
+              -H "X-Automation-Token: ${{ secrets.REINDEX_AUTOMATION_TOKEN }}")
+            status=$(echo "$body" | python3 -c "import sys,json;print(json.load(sys.stdin).get('status','unknown'))")
+            echo "[$i] status=$status"
+            if [ "$status" = "completed" ] || [ "$status" = "failed" ]; then
+              echo "$body"
+              break
+            fi
+          done
+
+          if [ "$status" != "completed" ]; then
+            echo "Reindex did not complete successfully (final status: $status)"
+            exit 1
+          fi

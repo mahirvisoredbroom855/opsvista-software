@@ -331,6 +331,27 @@ def log_query(
     return True
 
 
+def set_feedback(query_id: str, rating: str) -> bool:
+    """
+    Records a thumbs up/down on a previously-answered query by updating its
+    fact_query row. `rating` is "up" or "down" — validated by the caller
+    (chat.py's request model), not here. Best-effort like the rest of this
+    module: a Supabase outage shouldn't turn a UI button click into a 500.
+    """
+    client = _get_service_client()
+    if client is None:
+        return False
+
+    try:
+        client.table("fact_query").update({"user_rating": rating}).eq(
+            "query_id", query_id
+        ).execute()
+        return True
+    except Exception as e:
+        logger.warning(f"[pgvector] Failed to record feedback for {query_id}: {e}")
+        return False
+
+
 def hydrate_index_from_supabase() -> Optional[Dict[str, Any]]:
     """
     Rebuild the enhanced_index.json contents (the {"dim", "items"} shape

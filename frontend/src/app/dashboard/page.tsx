@@ -1,8 +1,22 @@
 "use client";
 
 import type { Session } from "@supabase/supabase-js";
+import {
+  Activity,
+  BarChart3,
+  CheckCircle2,
+  Coins,
+  Gauge,
+  GitBranch,
+  LineChart as LineChartIcon,
+  Loader2,
+  type LucideIcon,
+  RefreshCw,
+  Sparkles,
+  XCircle,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -78,14 +92,18 @@ function StatTile({
   label,
   value,
   hint,
+  icon: Icon,
 }: {
   label: string;
   value: string;
   hint?: string;
+  icon: LucideIcon;
 }) {
   return (
     <div className="stat-tile">
-      <div className="stat-tile__label">{label}</div>
+      <div className="stat-tile__label">
+        <Icon size={12} /> {label}
+      </div>
       <div className="stat-tile__value">{value}</div>
       {hint && <div className="stat-tile__hint">{hint}</div>}
     </div>
@@ -108,6 +126,106 @@ function fmtDate(iso: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+type ReindexStatus = {
+  status: "idle" | "running" | "completed" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  result: { chunks_discovered?: number } | null;
+  error: string | null;
+};
+
+function ReindexButton({ session }: { session: Session | null }) {
+  const [status, setStatus] = useState<ReindexStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, []);
+
+  function authHeaders(): Record<string, string> {
+    const token = session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  function poll() {
+    fetch(`${API_BASE}/api/rag/admin/reindex/status`, {
+      headers: authHeaders(),
+    })
+      .then((r) => r.json())
+      .then((data: ReindexStatus) => {
+        setStatus(data);
+        if (data.status === "running") {
+          pollRef.current = setTimeout(poll, 3000);
+        } else {
+          setBusy(false);
+        }
+      })
+      .catch(() => setBusy(false));
+  }
+
+  async function trigger() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/rag/admin/reindex`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (res.status === 401 || res.status === 403) {
+        throw new Error("You need Owner/Admin access to trigger a reindex.");
+      }
+      if (!res.ok && res.status !== 409) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      poll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start reindex");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="reindex-control">
+      <button
+        type="button"
+        className="btn btn--gradient"
+        onClick={trigger}
+        disabled={busy}
+      >
+        {busy ? (
+          <span className="flex items-center gap-1.5">
+            <Loader2 size={14} className="animate-spin" /> Reindexing…
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5">
+            <RefreshCw size={14} /> Reindex now
+          </span>
+        )}
+      </button>
+      {error && (
+        <span className="reindex-control__msg reindex-control__msg--error">
+          <XCircle size={12} /> {error}
+        </span>
+      )}
+      {!error && status?.status === "completed" && (
+        <span className="reindex-control__msg reindex-control__msg--ok">
+          <CheckCircle2 size={12} /> Done —{" "}
+          {status.result?.chunks_discovered ?? 0} chunks discovered
+        </span>
+      )}
+      {!error && status?.status === "failed" && (
+        <span className="reindex-control__msg reindex-control__msg--error">
+          <XCircle size={12} /> {status.error || "Reindex failed"}
+        </span>
+      )}
+    </div>
+  );
 }
 
 export default function DashboardPage() {
@@ -172,7 +290,9 @@ export default function DashboardPage() {
   return (
     <>
       <div className="page-hero">
-        <span className="page-hero__eyebrow">Observability</span>
+        <span className="page-hero__eyebrow">
+          <Sparkles size={11} /> Observability
+        </span>
         <h1 className="page-hero__title">Logging Dashboard</h1>
         <p className="page-hero__subtitle">
           Real traceability into what the assistant is actually doing — query
@@ -195,17 +315,20 @@ export default function DashboardPage() {
               ? "Supabase not configured"
               : `Last ${days} days`}
           </div>
-          <div className="range-toggle">
-            {[7, 30, 90].map((d) => (
-              <button
-                key={d}
-                type="button"
-                className={`range-toggle__btn ${days === d ? "range-toggle__btn--active" : ""}`}
-                onClick={() => setDays(d)}
-              >
-                {d}d
-              </button>
-            ))}
+          <div className="flex items-center gap-3">
+            <div className="range-toggle">
+              {[7, 30, 90].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={`range-toggle__btn ${days === d ? "range-toggle__btn--active" : ""}`}
+                  onClick={() => setDays(d)}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+            <ReindexButton session={session} />
           </div>
         </div>
 
@@ -227,23 +350,28 @@ export default function DashboardPage() {
             <div className="card__section">
               <div className="stat-grid">
                 <StatTile
+                  icon={Activity}
                   label="Total Queries"
                   value={String(metrics.summary.total_queries)}
                 />
                 <StatTile
+                  icon={Gauge}
                   label="Avg Latency"
                   value={fmtMs(metrics.summary.avg_latency_ms)}
                 />
                 <StatTile
+                  icon={Gauge}
                   label="P95 Latency"
                   value={fmtMs(metrics.summary.p95_latency_ms)}
                 />
                 <StatTile
+                  icon={GitBranch}
                   label="Fallback Rate"
                   value={fmtPct(metrics.summary.fallback_rate)}
                   hint="pgvector activations"
                 />
                 <StatTile
+                  icon={BarChart3}
                   label="Avg Confidence"
                   value={
                     metrics.summary.avg_confidence !== null
@@ -252,6 +380,7 @@ export default function DashboardPage() {
                   }
                 />
                 <StatTile
+                  icon={Coins}
                   label="Total Tokens"
                   value={metrics.summary.total_tokens.toLocaleString()}
                   hint={`${metrics.summary.total_prompt_tokens.toLocaleString()} in · ${metrics.summary.total_completion_tokens.toLocaleString()} out`}
@@ -260,7 +389,9 @@ export default function DashboardPage() {
             </div>
 
             <div className="card__section">
-              <div className="section-title">Query Volume</div>
+              <div className="section-title">
+                <BarChart3 size={14} style={{ marginRight: 6 }} /> Query Volume
+              </div>
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart
                   data={metrics.timeseries}
@@ -292,7 +423,8 @@ export default function DashboardPage() {
 
             <div className="card__section">
               <div className="section-title">
-                Latency &amp; Token Usage Over Time
+                <LineChartIcon size={14} style={{ marginRight: 6 }} /> Latency
+                &amp; Token Usage Over Time
               </div>
               <ResponsiveContainer width="100%" height={180}>
                 <LineChart

@@ -1,5 +1,6 @@
 "use client";
 
+import { CheckCircle2, Loader2, Lock, Mail, User } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -70,6 +71,16 @@ export default function LoginPage() {
 
   return (
     <div className="auth-shell">
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 -z-10 overflow-hidden"
+      >
+        <div className="animate-blob absolute top-1/4 -right-20 h-80 w-80 rounded-full bg-gradient-to-br from-brand/30 to-brand-deep/10 blur-3xl" />
+        <div
+          className="animate-blob absolute -bottom-20 -left-20 h-96 w-96 rounded-full bg-gradient-to-tr from-navy/20 to-navy-soft/5 blur-3xl"
+          style={{ animationDelay: "-8s" }}
+        />
+      </div>
       <div className="auth-card">
         <div className="auth-card__banner">
           <div className="auth-card__logo">
@@ -99,13 +110,17 @@ export default function LoginPage() {
           {mode === "confirm-pending" ? (
             <>
               <div className="auth-alert auth-alert--success">
+                <CheckCircle2
+                  size={15}
+                  style={{ verticalAlign: "-3px", marginRight: 5 }}
+                />
                 We sent a confirmation link to <strong>{email}</strong>. Click
                 it, then come back here and sign in with the password you just
                 set.
               </div>
               <button
                 type="button"
-                className="btn auth-submit"
+                className="btn btn--gradient auth-submit"
                 onClick={() => switchTo("signin")}
               >
                 Back to sign in
@@ -118,53 +133,68 @@ export default function LoginPage() {
               {isSignup && (
                 <div className="auth-field">
                   <label htmlFor="name">Full name</label>
-                  <input
-                    id="name"
-                    className="input"
-                    type="text"
-                    placeholder="Jane Doe"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    disabled={busy}
-                    onKeyDown={(e) => e.key === "Enter" && submit()}
-                  />
+                  <div className="input-icon-wrap">
+                    <User size={15} className="input-icon" />
+                    <input
+                      id="name"
+                      className="input input--with-icon"
+                      type="text"
+                      placeholder="Jane Doe"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      disabled={busy}
+                      onKeyDown={(e) => e.key === "Enter" && submit()}
+                    />
+                  </div>
                 </div>
               )}
 
               <div className="auth-field">
                 <label htmlFor="email">Email</label>
-                <input
-                  id="email"
-                  className="input"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={busy}
-                  onKeyDown={(e) => e.key === "Enter" && submit()}
-                />
+                <div className="input-icon-wrap">
+                  <Mail size={15} className="input-icon" />
+                  <input
+                    id="email"
+                    className="input input--with-icon"
+                    type="email"
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={busy}
+                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                  />
+                </div>
               </div>
               <div className="auth-field">
                 <label htmlFor="password">Password</label>
-                <input
-                  id="password"
-                  className="input"
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={busy}
-                  onKeyDown={(e) => e.key === "Enter" && submit()}
-                />
+                <div className="input-icon-wrap">
+                  <Lock size={15} className="input-icon" />
+                  <input
+                    id="password"
+                    className="input input--with-icon"
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    disabled={busy}
+                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                  />
+                </div>
               </div>
 
               <button
                 type="button"
-                className="btn auth-submit"
+                className="btn btn--gradient auth-submit"
                 onClick={submit}
                 disabled={busy || !email || !password || (isSignup && !name)}
               >
-                {busy ? "…" : isSignup ? "Create account" : "Sign in"}
+                {busy ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : isSignup ? (
+                  "Create account"
+                ) : (
+                  "Sign in"
+                )}
               </button>
 
               <div className="auth-switch">

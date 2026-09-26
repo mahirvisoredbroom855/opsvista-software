@@ -36,3 +36,5 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.13.5"
+      - key: REINDEX_AUTOMATION_TOKEN
+        sync: false

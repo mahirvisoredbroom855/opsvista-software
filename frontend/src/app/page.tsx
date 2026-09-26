@@ -1,6 +1,20 @@
 "use client";
 
 import type { Session } from "@supabase/supabase-js";
+import {
+  Check,
+  Clock,
+  Copy,
+  Database,
+  Gauge,
+  GitBranch,
+  LogOut,
+  RefreshCw,
+  Send,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -15,9 +29,16 @@ import {
   YAxis,
 } from "recharts";
 import remarkGfm from "remark-gfm";
+import {
+  detectNumericColumns,
+  formatRelativeTime,
+  formatTime,
+  selectChartableColumns,
+  type TableData,
+  toNumber,
+  uid,
+} from "../lib/chatUtils";
 import { supabase } from "../lib/supabaseClient";
-
-type TableData = { sheet: string; columns: string[]; rows: string[][] };
 
 type Source = {
   text: string;
@@ -29,19 +50,34 @@ type Source = {
   source_display?: string;
 };
 
+type Trace = {
+  impl?: string;
+  used_fallback?: boolean;
+  retrieval_confidence?: number;
+  source_diversity?: number;
+  fallback_reason?: string;
+};
+
 type StatusResponse = {
   llm?: Record<string, unknown>;
   retrieval?: Record<string, unknown>;
 };
 
+type IndexStatusResponse = {
+  status: string;
+  file_info?: { modified_epoch?: number };
+};
+
 type ChatMessage = {
   id: string;
+  chatId?: string;
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
-  trace?: Record<string, unknown>;
+  trace?: Trace;
   model?: string;
   pending?: boolean;
+  rating?: "up" | "down";
   createdAt: number;
 };
 
@@ -67,62 +103,6 @@ const EXAMPLE_QUESTIONS = [
   "Which spare parts are low on stock?",
   "Which orders are currently delayed?",
 ];
-
-function uid() {
-  return Math.random().toString(36).slice(2);
-}
-
-function formatTime(ts: number) {
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function isNumeric(value: string): boolean {
-  if (!value || !value.trim()) return false;
-  return /^-?[\d,]+(\.\d+)?$/.test(value.trim());
-}
-
-function toNumber(value: string): number {
-  return Number(value.replace(/,/g, "")) || 0;
-}
-
-/** Decide which columns are numeric (>=70% of non-empty values parse as numbers). */
-function detectNumericColumns(table: TableData): boolean[] {
-  return table.columns.map((_, colIdx) => {
-    const values = table.rows.map((r) => r[colIdx]).filter((v) => v?.trim());
-    if (values.length === 0) return false;
-    const numericCount = values.filter(isNumeric).length;
-    return numericCount / values.length >= 0.7;
-  });
-}
-
-/**
- * Numeric columns are only safe to chart together when they're on a
- * comparable scale. Mixing a per-row amount with a cumulative running
- * balance (or a unit price with a total value) makes the smaller series
- * invisible. Drop "balance/running total"-style columns outright, then keep
- * only columns within ~20x of the largest remaining magnitude.
- */
-function selectChartableColumns(
-  table: TableData,
-  numericColIdxs: number[],
-): number[] {
-  const candidates = numericColIdxs.filter(
-    (ci) => !/balance|running total/i.test(table.columns[ci]),
-  );
-  if (candidates.length === 0) return [];
-
-  const magnitudes = candidates.map((ci) => ({
-    ci,
-    max: Math.max(...table.rows.map((r) => Math.abs(toNumber(r[ci])))),
-  }));
-  const overallMax = Math.max(...magnitudes.map((m) => m.max));
-  if (overallMax === 0) return [];
-
-  return magnitudes.filter((m) => m.max >= overallMax / 20).map((m) => m.ci);
-}
 
 function ScoreBar({ score }: { score: number }) {
   const pct = Math.max(0, Math.min(100, Math.round(score * 100)));
@@ -306,8 +286,96 @@ function CopyButton({ text }: { text: string }) {
         }
       }}
     >
-      {copied ? "Copied" : "Copy"}
+      {copied ? (
+        <span className="flex items-center gap-1">
+          <Check size={11} /> Copied
+        </span>
+      ) : (
+        <span className="flex items-center gap-1">
+          <Copy size={11} /> Copy
+        </span>
+      )}
     </button>
+  );
+}
+
+/**
+ * Retrieval-transparency panel: surfaces the dual-path trace (which index
+ * answered, confidence, source diversity) that the backend has always sent
+ * but the UI previously discarded. This is the "grounding inspector" piece
+ * of a properly transparent RAG UI — showing *how* an answer was found, not
+ * just what it cited.
+ */
+function TracePanel({ trace }: { trace: Trace }) {
+  const confidencePct = Math.round((trace.retrieval_confidence ?? 0) * 100);
+  const diversityPct = Math.round((trace.source_diversity ?? 0) * 100);
+  const usedFallback = Boolean(trace.used_fallback);
+
+  return (
+    <div className="trace-panel">
+      <div className="trace-panel__row">
+        <GitBranch size={12} />
+        <span>
+          Path:{" "}
+          <strong>
+            {usedFallback ? "pgvector fallback" : "Enhanced index (primary)"}
+          </strong>
+        </span>
+        {usedFallback && (
+          <span className="badge badge--fallback">fallback used</span>
+        )}
+      </div>
+      <div className="trace-panel__row">
+        <Gauge size={12} />
+        <span>
+          Confidence: <strong>{confidencePct}%</strong>
+        </span>
+        <span className="trace-panel__sep">·</span>
+        <span>
+          Source diversity: <strong>{diversityPct}%</strong>
+        </span>
+      </div>
+      {trace.fallback_reason && (
+        <div className="trace-panel__row trace-panel__reason">
+          <Database size={12} />
+          <span>{trace.fallback_reason}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FeedbackButtons({
+  chatId,
+  rating,
+  onRate,
+}: {
+  chatId?: string;
+  rating?: "up" | "down";
+  onRate: (rating: "up" | "down") => void;
+}) {
+  if (!chatId) return null;
+  return (
+    <div className="feedback-btns">
+      <button
+        type="button"
+        className={`feedback-btn ${rating === "up" ? "feedback-btn--active" : ""}`}
+        onClick={() => onRate("up")}
+        aria-label="Good answer"
+        title="Good answer"
+      >
+        <ThumbsUp size={13} />
+      </button>
+      <button
+        type="button"
+        className={`feedback-btn ${rating === "down" ? "feedback-btn--active feedback-btn--down" : ""}`}
+        onClick={() => onRate("down")}
+        aria-label="Poor answer"
+        title="Poor answer"
+      >
+        <ThumbsDown size={13} />
+      </button>
+    </div>
   );
 }
 
@@ -316,6 +384,9 @@ export default function Page() {
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [indexStatus, setIndexStatus] = useState<IndexStatusResponse | null>(
+    null,
+  );
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -349,6 +420,10 @@ export default function Page() {
       .then((r) => r.json())
       .then(setStatus)
       .catch(() => setStatus(null));
+    fetch(`${API_BASE}/api/rag/chat/index/status`)
+      .then((r) => r.json())
+      .then(setIndexStatus)
+      .catch(() => setIndexStatus(null));
   }, []);
 
   useEffect(() => {
@@ -361,11 +436,43 @@ export default function Page() {
     return `LLM ${ok(status?.llm)} · Retrieval ${ok(status?.retrieval)}`;
   }, [status]);
 
+  const syncedText = useMemo(() => {
+    const epoch = indexStatus?.file_info?.modified_epoch;
+    if (indexStatus?.status !== "operational" || !epoch) return null;
+    return `Synced ${formatRelativeTime(epoch)}`;
+  }, [indexStatus]);
+
   function applyToMessage(
     id: string,
     updater: (m: ChatMessage) => ChatMessage,
   ) {
     setMessages((prev) => prev.map((m) => (m.id === id ? updater(m) : m)));
+  }
+
+  async function rateMessage(messageId: string, rating: "up" | "down") {
+    let chatId: string | undefined;
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        chatId = m.chatId;
+        return { ...m, rating };
+      }),
+    );
+    if (!chatId) return;
+    try {
+      const token = session?.access_token;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      await fetch(`${API_BASE}/api/rag/chat/feedback`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query_id: chatId, rating }),
+      });
+    } catch {
+      /* best-effort — feedback not landing shouldn't disrupt the chat */
+    }
   }
 
   async function sendMessage(message: string) {
@@ -432,6 +539,7 @@ export default function Page() {
           if (eventName === "meta") {
             applyToMessage(pendingMsg.id, (m) => ({
               ...m,
+              chatId: data.chat_id,
               sources: data.sources,
               trace: data.trace,
             }));
@@ -486,22 +594,38 @@ export default function Page() {
     <>
       <div className="page-hero">
         <span className="page-hero__eyebrow">
+          <Sparkles size={11} />
           Precision Textile Industry · Internal
         </span>
-        <h1 className="page-hero__title">Knowledge Assistant</h1>
+        <h1 className="page-hero__title">
+          Knowledge{" "}
+          <span className="bg-gradient-to-r from-brand-deep via-brand to-amber-400 bg-clip-text text-transparent">
+            Assistant
+          </span>
+        </h1>
         <p className="page-hero__subtitle">
           Ask natural-language questions over Finance, HR, Commercial,
           Maintenance, Admin, and Accounting records — answers are grounded and
           cited from source documents in Google Drive.
         </p>
       </div>
-      <div className="card">
+      <div className="card card--glass">
         <div className="card__section chat-topbar">
-          <div className="note">{statusText}</div>
+          <div className="note">
+            {statusText}
+            {syncedText && (
+              <span
+                className="sync-badge"
+                title="Last time the knowledge base was rebuilt from Google Drive"
+              >
+                <Clock size={11} /> {syncedText}
+              </span>
+            )}
+          </div>
           <div className="chat-topbar__right">
             {messages.length > 0 && (
               <button type="button" className="link-btn" onClick={clearChat}>
-                New conversation
+                <RefreshCw size={12} /> New conversation
               </button>
             )}
             {session && (
@@ -511,7 +635,7 @@ export default function Page() {
                     session.user.email}
                 </span>
                 <button type="button" className="link-btn" onClick={signOut}>
-                  Sign out
+                  <LogOut size={12} /> Sign out
                 </button>
               </>
             )}
@@ -540,7 +664,7 @@ export default function Page() {
             </div>
           )}
           {messages.map((m) => (
-            <div key={m.id} className={`msg msg--${m.role}`}>
+            <div key={m.id} className={`animate-fade-in msg msg--${m.role}`}>
               <div className="msg__bubble">
                 {m.pending && !m.content ? (
                   <span className="pulse">Thinking…</span>
@@ -560,9 +684,19 @@ export default function Page() {
               <div className="msg__meta">
                 <span className="msg__time">{formatTime(m.createdAt)}</span>
                 {m.role === "assistant" && !m.pending && (
-                  <CopyButton text={m.content} />
+                  <>
+                    <CopyButton text={m.content} />
+                    <FeedbackButtons
+                      chatId={m.chatId}
+                      rating={m.rating}
+                      onRate={(r) => rateMessage(m.id, r)}
+                    />
+                  </>
                 )}
               </div>
+              {m.role === "assistant" && !m.pending && m.trace && (
+                <TracePanel trace={m.trace} />
+              )}
               {m.role === "assistant" &&
                 !m.pending &&
                 m.sources &&
@@ -600,11 +734,17 @@ export default function Page() {
             />
             <button
               type="button"
-              className="btn"
+              className="btn btn--gradient"
               onClick={send}
               disabled={loading || !input.trim()}
             >
-              {loading ? "…" : "Send"}
+              {loading ? (
+                "…"
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  Send <Send size={14} />
+                </span>
+              )}
             </button>
           </div>
           {error && (

@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS fact_query (
     prompt_tokens         INT,
     completion_tokens     INT,
     total_tokens          INT,
+    user_rating           TEXT CHECK (user_rating IN ('up', 'down')),
     created_at            TIMESTAMPTZ DEFAULT now()
 );
 

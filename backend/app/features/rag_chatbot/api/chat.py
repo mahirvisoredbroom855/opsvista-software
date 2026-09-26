@@ -7,7 +7,7 @@ import uuid
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Query, Body, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -26,6 +26,10 @@ class ChatRequest(BaseModel):
     message: str
     top_k: int = 4
     debug: bool = False
+
+class FeedbackRequest(BaseModel):
+    query_id: str
+    rating: Literal["up", "down"]
 
 class RetrieveResponse(BaseModel):
     count: int
@@ -641,6 +645,25 @@ async def chat_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/feedback")
+@limiter.limit("60/minute")
+async def submit_feedback(
+    request: Request,
+    body: FeedbackRequest = Body(...),
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
+    """
+    Thumbs up/down on a completed answer, keyed by the chat_id returned in
+    the /complete or /stream response's `done`/root payload. Best-effort —
+    if Supabase isn't configured this quietly no-ops rather than erroring,
+    since a missing audit trail shouldn't block the UI interaction.
+    """
+    from ..vector.pgvector_store import set_feedback
+
+    recorded = await asyncio.to_thread(set_feedback, body.query_id, body.rating)
+    return {"recorded": recorded}
 
 
 @router.get("/status")

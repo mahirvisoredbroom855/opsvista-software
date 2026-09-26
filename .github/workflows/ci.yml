@@ -63,6 +63,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Unit tests (Mocha)
+        run: npm run test
+
       - name: Build
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8000

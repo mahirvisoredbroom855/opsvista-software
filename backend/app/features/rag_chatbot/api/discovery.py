@@ -27,13 +27,13 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
-from app.core.auth_deps import require_roles
+from app.core.auth_deps import require_roles_or_automation_token
 from app.core.rate_limit import limiter
 
 router = APIRouter(prefix="/api/rag/admin", tags=["Admin Reindex"])
 logger = logging.getLogger(__name__)
 
-_require_admin = require_roles(["Owner", "Admin"])
+_require_admin = require_roles_or_automation_token(["Owner", "Admin"])
 
 # backend/app/features/rag_chatbot/api/discovery.py -> backend/
 BACKEND_DIR = Path(__file__).resolve().parents[4]
