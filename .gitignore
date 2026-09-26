@@ -1,7 +1,10 @@
-# Environment variables
+# Environment variables / secrets
 .env
 .env.local
 .env.production
+.env.*
+!.env.example
+backend/credentials/
 
 # Python
 __pycache__/
@@ -34,14 +37,8 @@ logs/
 # Database
 *.db
 *.sqlite3
-.env
-backend/credentials/
 
-# secrets
-.env
-backend/credentials/
-
-# secrets
-.env
-.env.*
-backend/credentials/
+# Generated index backups (the live enhanced_index.json itself stays
+# tracked, per existing repo convention — only its versioned snapshots
+# are excluded, since those churn on every reindex)
+backend/app/features/rag_chatbot/vector/backups/

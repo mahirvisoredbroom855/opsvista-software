@@ -3,6 +3,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from typing import List, Dict, Optional, BinaryIO
+from pathlib import Path
 import io
 import os
 from datetime import datetime, timedelta
@@ -10,21 +11,56 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# backend/app/features/rag_chatbot/vector/google_drive_service.py -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+def _resolve_credentials_path(raw: str) -> str:
+    """
+    Resolve a possibly-relative credentials path against the repo root, not
+    whatever the current working directory happens to be. Without this, the
+    same relative path in .env resolves differently depending on whether the
+    app was launched from the repo root or from backend/ (e.g. via
+    `uvicorn app.main:app` run from inside backend/).
+    """
+    p = Path(raw)
+    if p.is_absolute():
+        return str(p)
+    if p.exists():
+        return str(p)
+    candidate = REPO_ROOT / p
+    if candidate.exists():
+        return str(candidate)
+    # Also try stripping a leading "backend/" in case cwd is already backend/
+    if p.parts and p.parts[0] == "backend":
+        alt = REPO_ROOT / Path(*p.parts[1:])
+        if alt.exists():
+            return str(alt)
+    return str(candidate)  # doesn't exist; return the repo-root-relative guess for a clear error message
+
+
 class GoogleDriveService:
     """Service for interacting with Google Drive API"""
-    
+
     def __init__(self, credentials_path: str = None):
-        self.credentials_path = credentials_path or os.getenv('GOOGLE_CREDENTIALS_PATH', './google_credentials.json')
+        # GOOGLE_DRIVE_CREDENTIALS_PATH is the canonical name (matches config.py
+        # and README); GOOGLE_CREDENTIALS_PATH kept as a fallback for older envs.
+        raw_path = (
+            credentials_path
+            or os.getenv('GOOGLE_DRIVE_CREDENTIALS_PATH')
+            or os.getenv('GOOGLE_CREDENTIALS_PATH', './google_credentials.json')
+        )
+        self.credentials_path = _resolve_credentials_path(raw_path)
         self.scopes = ['https://www.googleapis.com/auth/drive.readonly']
         self.service = None
         self._connect()
-    
+
     def _connect(self):
         """Authenticate and create Drive service"""
         try:
             if not os.path.exists(self.credentials_path):
                 raise FileNotFoundError(f"Google credentials not found: {self.credentials_path}")
-            
+
             credentials = service_account.Credentials.from_service_account_file(
                 self.credentials_path,
                 scopes=self.scopes
@@ -57,9 +93,16 @@ class GoogleDriveService:
             }
     
     def find_finance_folder(self, folder_name: str = "Md. Mizanur Rahman (PTIL)") -> Optional[str]:
-        """Find the finance folder in Google Drive"""
+        """
+        Find a folder by name (despite the historical "finance" name, this is
+        used generically for any department folder). Uses `contains` rather
+        than exact equality since callers may pass a short owner name (e.g.
+        "Riaz Uddin Sarker") while the real folder has a suffix (e.g.
+        "Riaz Uddin Sarker (Admin)").
+        """
         try:
-            query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
+            escaped = folder_name.replace("'", "\\'")
+            query = f"name contains '{escaped}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
             
             results = self.service.files().list(
                 q=query,
@@ -417,6 +460,56 @@ class GoogleDriveService:
             logger.error(f"❌ Error searching folder {folder_id}: {str(e)}")
             return []
     
+    def list_all_files_in_folder(self, folder_id: str, recursive: bool = True) -> List[Dict[str, any]]:
+        """
+        List every non-trashed file (any type) directly inside folder_id, and
+        optionally recurse into subfolders. Unlike list_excel_files(), this is
+        not restricted to a specific MIME type — used for general document
+        ingestion (PDF, DOCX, TXT, Google Docs/Sheets, etc.).
+        """
+        folder_mime = "application/vnd.google-apps.folder"
+        found: List[Dict[str, any]] = []
+        try:
+            results = self.service.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields="files(id, name, modifiedTime, size, mimeType, parents)",
+                pageSize=1000,
+            ).execute()
+            entries = results.get("files", [])
+
+            for entry in entries:
+                if entry["mimeType"] == folder_mime:
+                    if recursive:
+                        found.extend(self.list_all_files_in_folder(entry["id"], recursive=True))
+                    continue
+                found.append(
+                    {
+                        "id": entry["id"],
+                        "name": entry["name"],
+                        "modified_time": entry.get("modifiedTime"),
+                        "size": int(entry.get("size", 0) or 0),
+                        "mime_type": entry["mimeType"],
+                    }
+                )
+            return found
+        except Exception as e:
+            logger.error(f"❌ Error listing files in folder {folder_id}: {str(e)}")
+            return found
+
+    def export_google_doc_as_text(self, file_id: str) -> bytes:
+        """Export a native Google Doc as plain text (Docs aren't downloadable via get_media)."""
+        try:
+            request = self.service.files().export_media(fileId=file_id, mimeType="text/plain")
+            file_io = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_io, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+            return file_io.getvalue()
+        except Exception as e:
+            logger.error(f"❌ Error exporting Google Doc {file_id}: {str(e)}")
+            return b""
+
     def find_target_files_anywhere(self, base_folder_name: str = "Md. Mizanur Rahman (PTIL)") -> List[Dict[str, any]]:
         """Find target files anywhere in the specified base folder and its subfolders"""
         try:

@@ -5,13 +5,16 @@ import os
 import json
 import uuid
 import asyncio
-import inspect
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Query, Body
+from fastapi import APIRouter, Query, Body, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+from app.core.auth_deps import get_current_user_optional
+from app.core.rate_limit import limiter
 
 router = APIRouter(prefix="/api/rag/chat", tags=["RAG Chat"])
 
@@ -40,6 +43,7 @@ class ChatResponse(BaseModel):
     created: str
     usage: Dict[str, Any]
     trace: Dict[str, Any]
+    warnings: List[str] = []
 
 
 # =========================
@@ -183,105 +187,90 @@ def _enhanced_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[s
 
 
 # =========================
-# Integrated retrieval (fallback only)
+# pgvector retrieval (real fallback path — Supabase/Postgres)
 # =========================
 
-async def _integrated_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Fallback retrieval using integrated system."""
-    # Try both export names from the integrated module
-    IntegratedSearchSystem = None
-    err1 = err2 = None
-    try:
-        from ..vector.integrated_search_system import IntegratedSearchManager as IntegratedSearchSystem
-    except Exception as e:
-        err1 = e
-        try:
-            from ..vector.integrated_search_system import SimpleSearchInterface as IntegratedSearchSystem
-        except Exception as e2:
-            err2 = e2
+async def _pgvector_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Real fallback retrieval via Postgres/pgvector cosine similarity search
+    (see backend/sql/schema.sql and vector/pgvector_store.py). This is the
+    dual-path design's actual second path — not a stub — but it degrades
+    gracefully to "no results" if Supabase isn't configured yet.
+    """
+    from ..vector.pgvector_store import is_configured, pgvector_search
 
-    if IntegratedSearchSystem is None:
-        return [], {
-            "impl": "failed",
-            "method": "integrated_import",
-            "error": f"{err1!r} | {err2!r}",
-        }
+    if not is_configured():
+        return [], {"impl": "pgvector", "method": "match_chunks", "error": "Supabase not configured"}
 
     try:
-        system = IntegratedSearchSystem()
-
-        # Find a method: retrieve/search/query
-        method = None
-        for name in ("retrieve", "search", "query"):
-            if hasattr(system, name):
-                method = getattr(system, name)
-                break
-        if method is None:
-            return [], {"impl": "failed", "method": "integrated", "error": "No retrieve/search/query method"}
-
-        # Call with whatever signature it supports
-        is_coro = asyncio.iscoroutinefunction(method)
-        try:
-            sig = inspect.signature(method)
-            params = sig.parameters
-        except Exception:
-            params = {}
-
-        try:
-            if "top_k" in params:
-                res = await method(q, top_k=top_k) if is_coro else method(q, top_k=top_k)
-            elif "k" in params:
-                res = await method(q, k=top_k) if is_coro else method(q, k=top_k)
-            elif "limit" in params:
-                res = await method(q, limit=top_k) if is_coro else method(q, limit=top_k)
-            elif "n" in params:
-                res = await method(q, n=top_k) if is_coro else method(q, n=top_k)
-            else:
-                # try positional (q, top_k) then just (q)
-                try:
-                    res = await method(q, top_k) if is_coro else method(q, top_k)
-                except TypeError:
-                    res = await method(q) if is_coro else method(q)
-        except TypeError as e:
-            return [], {"impl": "failed", "method": "integrated_call", "error": str(e)}
-
-        docs = [_norm_one(r) for r in (res or [])]
-        # Enforce size here if upstream doesn't accept k
-        docs = docs[:top_k]
-        return docs, {"impl": "integrated", "method": getattr(method, "__name__", "unknown"), "count": len(docs)}
+        results = await asyncio.to_thread(pgvector_search, q, top_k)
     except Exception as e:
-        return [], {"impl": "failed", "method": "integrated_call", "error": str(e)}
+        return [], {"impl": "pgvector", "method": "match_chunks", "error": str(e)}
+
+    docs = [_norm_one(r) for r in results]
+    return docs, {"impl": "pgvector", "method": "match_chunks", "count": len(docs)}
 
 
 # =========================
-# Main retrieve function - Enhanced Index First
+# Quality gate helpers
+# =========================
+
+# Below this top-score, the enhanced index result is treated as low-
+# confidence and the pgvector fallback is attempted too — not just on
+# literally zero results. Configurable since "good enough" varies by corpus.
+RAG_QUALITY_THRESHOLD = float(os.getenv("RAG_QUALITY_THRESHOLD", "0.5"))
+
+
+def _retrieval_confidence(docs: List[Dict[str, Any]]) -> float:
+    return max((d.get("score", 0.0) for d in docs), default=0.0)
+
+
+def _source_diversity(docs: List[Dict[str, Any]]) -> float:
+    """Fraction of results that come from distinct source files — a low
+    value (many chunks, one file) is a legitimate result, but worth
+    surfacing in the trace per the spec's 'diversity metrics' requirement."""
+    if not docs:
+        return 0.0
+    files = {d.get("metadata", {}).get("file_name") for d in docs}
+    return round(len(files) / len(docs), 2)
+
+
+# =========================
+# Main retrieve function - dual-path (Enhanced Index primary, pgvector fallback)
 # =========================
 
 async def retrieve_with_trace(q: str, top_k: int = 4, force_fake: bool = False):
     """
-    Simplified retrieve_with_trace that prioritizes enhanced index.
-    
-    Args:
-        q: Query string
-        top_k: Number of results to return
-        force_fake: Force use of enhanced index (renamed from fake for clarity)
+    Dual-path retrieval: Enhanced Index (JSON, primary) first; the pgvector
+    fallback (Supabase/Postgres) activates when the primary path returns
+    nothing OR its top confidence is below RAG_QUALITY_THRESHOLD — not just
+    on a hard empty-results check, per the spec's "quality gate: threshold +
+    diversity check" requirement.
     """
-    # Primary: Use enhanced index (contains your Google Drive embedded data)
     docs, trace = _enhanced_retrieve(q, top_k)
-    
-    # If enhanced index has results, use them
-    if docs:
-        return docs, trace
-    
-    # Fallback: Try integrated system only if enhanced index fails or has no results
-    if not force_fake:
-        fdocs, ftrace = await _integrated_retrieve(q, top_k)
+    confidence = _retrieval_confidence(docs)
+    trace["retrieval_confidence"] = confidence
+    trace["source_diversity"] = _source_diversity(docs)
+    trace["used_fallback"] = False
+
+    needs_fallback = (not docs) or confidence < RAG_QUALITY_THRESHOLD
+    if needs_fallback and not force_fake:
+        fdocs, ftrace = await _pgvector_retrieve(q, top_k)
         if fdocs:
-            ftrace["fallback_from"] = trace
+            ftrace["retrieval_confidence"] = _retrieval_confidence(fdocs)
+            ftrace["source_diversity"] = _source_diversity(fdocs)
+            ftrace["used_fallback"] = True
+            ftrace["fallback_reason"] = (
+                "no_primary_results" if not docs else f"low_confidence ({confidence:.2f} < {RAG_QUALITY_THRESHOLD})"
+            )
+            ftrace["primary_trace"] = trace
             return fdocs, ftrace
-    
-    # Return empty results with trace
-    trace["warning"] = "No results found in enhanced index or integrated system"
+        else:
+            trace["fallback_attempted"] = True
+            trace["fallback_error"] = ftrace.get("error", "no pgvector results")
+
+    if not docs:
+        trace["warning"] = "No results found in enhanced index or pgvector fallback"
     return docs, trace
 
 
@@ -290,7 +279,9 @@ async def retrieve_with_trace(q: str, top_k: int = 4, force_fake: bool = False):
 # =========================
 
 @router.get("/_retrieve", response_model=RetrieveResponse)
+@limiter.limit("30/minute")
 async def retrieve_endpoint(
+    request: Request,
     q: str = Query(..., alias="q"),
     top_k: int = Query(4),
     use_fake: bool = Query(False),
@@ -323,41 +314,116 @@ def _render_sources(docs: List[Dict[str, Any]], limit: int = 4) -> List[Dict[str
         })
     return out
 
-def _build_prompt(user_msg: str, docs: List[Dict[str, Any]]) -> str:
-    parts = [f"User message: {user_msg}", "", "Context documents:"]
-    
-    for i, d in enumerate(docs, 1):
+def _build_context_texts(docs: List[Dict[str, Any]]) -> List[str]:
+    """
+    Format each retrieved chunk with a header carrying its real identity
+    (title, department, source) so the model can naturally refer to it by
+    name instead of needing an abstract citation marker.
+    """
+    out = []
+    for d in docs:
         metadata = d.get("metadata", {})
-        source_indicator = ""
-        if metadata.get("source") == "google_drive":
-            source_indicator = " [Google Drive]"
-        
-        parts.append(f"[{i}]{source_indicator} {d.get('text','')[:1200]}")
-    
-    parts.append("")
-    parts.append("Answer the user briefly using the context if relevant. If information comes from Google Drive files, mention this source.")
-    return "\n".join(parts)
+        title = metadata.get("title") or metadata.get("file_name", "Untitled document")
+        department = metadata.get("department", "General")
+        origin = "Google Drive" if metadata.get("source") == "google_drive" else "Local"
+        header = f"Document: {title} | Department: {department} | Source: {origin}"
+        out.append(f"{header}\n{d.get('text', '')[:1200]}")
+    return out
+
+
+# =========================
+# Token budget enforcement
+# =========================
+
+# 4 chars/token is a standard rough estimate for English text — good enough
+# for a soft context budget without adding a tokenizer dependency (tiktoken
+# is OpenAI-specific and wouldn't match Gemini's tokenizer anyway).
+CHARS_PER_TOKEN_ESTIMATE = 4
+MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "6000"))
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // CHARS_PER_TOKEN_ESTIMATE)
+
+
+def _enforce_token_budget(context_texts: List[str], max_tokens: int = MAX_CONTEXT_TOKENS) -> Tuple[List[str], bool]:
+    """
+    context_texts is already ordered best-to-worst by relevance (docs are
+    sorted by score during retrieval). Greedily keep chunks until the
+    estimated budget is exhausted, dropping the least-relevant remainder —
+    never silently truncating the model's *answer*, only how much source
+    context it gets to see. Returns (kept_texts, was_truncated).
+    """
+    kept: List[str] = []
+    total = 0
+    truncated = False
+
+    for text in context_texts:
+        t = _estimate_tokens(text)
+        if not kept and t > max_tokens:
+            # Single chunk alone exceeds the whole budget: hard-truncate it
+            # rather than dropping it entirely (still gives partial context).
+            allowed_chars = max(200, max_tokens * CHARS_PER_TOKEN_ESTIMATE)
+            kept.append(text[:allowed_chars])
+            total = max_tokens
+            truncated = True
+            continue
+        if total + t > max_tokens:
+            truncated = True
+            continue
+        kept.append(text)
+        total += t
+
+    return kept, truncated
 
 @router.post("/complete", response_model=ChatResponse)
-async def chat_complete(body: ChatRequest = Body(...)):
+@limiter.limit("20/minute")
+async def chat_complete(
+    request: Request,
+    body: ChatRequest = Body(...),
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
+    request_start = datetime.now(timezone.utc)
+    user_id = current_user.get("id") if current_user else None
+    warnings: List[str] = []
+
     # Retrieve context using enhanced index
     docs, trace = await retrieve_with_trace(body.message, top_k=body.top_k)
 
+    if not docs:
+        warnings.append("No relevant documents were found for this query.")
+    elif trace.get("used_fallback"):
+        warnings.append("Primary index returned low-confidence results; answer used the pgvector fallback path.")
+    elif trace.get("fallback_attempted"):
+        conf = trace.get("retrieval_confidence")
+        conf_str = f"{conf:.2f}" if conf is not None else "unknown"
+        warnings.append(f"Retrieval confidence was low ({conf_str}) and the pgvector fallback found no additional results.")
+
     # Try to use your LLM client if available
     content = ""
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = "none (retrieval-only fallback)"
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     try:
         # Import the LLM client wrapper class
         from ..llm.llm_client import LLMClient
-        
-        client = LLMClient(model=model)
-        prompt = _build_prompt(body.message, docs)
-        
-        # Call the async complete method
-        content = await client.complete(prompt)
-        
+        from ..llm.prompt_engineering import get_prompt_for_query
+
+        client = LLMClient()
+        context_texts = _build_context_texts(docs)
+        context_texts, context_truncated = _enforce_token_budget(context_texts)
+        if context_truncated:
+            warnings.append(
+                f"Retrieved context exceeded the {MAX_CONTEXT_TOKENS}-token budget; the least-relevant sources were dropped before generation."
+            )
+        messages = get_prompt_for_query(body.message, context_texts)
+
+        result = await client.complete_with_messages(messages)
+        content = result["content"]
+
+        # Reflect whichever backend actually ran (OpenAI or Gemini), not a guess
+        model = getattr(client.backend, "model", model)
+
         # Get usage info if available
         usage = client.last_usage or usage
         
@@ -397,25 +463,204 @@ async def chat_complete(body: ChatRequest = Body(...)):
             )
             content = content + fallback_content if body.debug else fallback_content
 
+    chat_id = str(uuid.uuid4())
+    processing_time_ms = int((datetime.now(timezone.utc) - request_start).total_seconds() * 1000)
+
     resp = {
-        "chat_id": str(uuid.uuid4()),
+        "chat_id": chat_id,
         "content": content,
         "model": model,
         "sources": _render_sources(docs, limit=body.top_k),
         "created": datetime.now(timezone.utc).isoformat(),
+        "warnings": warnings,
         "usage": usage,
         "trace": trace,
     }
+
+    # Best-effort audit logging (fact_query + bridge_query_citation) — never
+    # blocks or fails the chat response if Supabase isn't configured/reachable.
+    try:
+        from ..vector.pgvector_store import log_query
+
+        await asyncio.to_thread(
+            log_query,
+            query_id=chat_id,
+            query_text=body.message,
+            top_k=body.top_k,
+            used_fallback=bool(trace.get("used_fallback")),
+            retrieval_confidence=trace.get("retrieval_confidence"),
+            processing_time_ms=processing_time_ms,
+            citations=docs,
+            user_id=user_id,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            total_tokens=usage.get("total_tokens"),
+        )
+    except Exception as e:
+        print(f"[WARN] Audit logging failed: {e}")
+
     return resp
 
+
+# =========================
+# Streaming (SSE)
+# =========================
+
+def _sse_event(event: str, data: Dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.post("/stream")
+@limiter.limit("20/minute")
+async def chat_stream(
+    request: Request,
+    body: ChatRequest = Body(...),
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
+    """
+    Same retrieval + generation pipeline as /complete, but streams the
+    answer as Server-Sent Events instead of waiting for the full
+    completion. Event types:
+      - meta: retrieval finished — chat_id, sources, trace, warnings
+      - token: one incremental piece of the answer's text
+      - warning: a non-fatal issue (e.g. context truncation) discovered mid-stream
+      - error: generation failed; a retrieval-only summary is not sent here,
+        the frontend should show the error and let the user retry
+      - done: generation finished — usage + processing time
+
+    Uses request_start captured before the async generator runs so
+    processing_time_ms reflects the whole request, matching /complete.
+    """
+    request_start = datetime.now(timezone.utc)
+    user_id = current_user.get("id") if current_user else None
+
+    async def event_generator():
+        warnings: List[str] = []
+        docs, trace = await retrieve_with_trace(body.message, top_k=body.top_k)
+
+        if not docs:
+            warnings.append("No relevant documents were found for this query.")
+        elif trace.get("used_fallback"):
+            warnings.append("Primary index returned low-confidence results; answer used the pgvector fallback path.")
+        elif trace.get("fallback_attempted"):
+            conf = trace.get("retrieval_confidence")
+            conf_str = f"{conf:.2f}" if conf is not None else "unknown"
+            warnings.append(f"Retrieval confidence was low ({conf_str}) and the pgvector fallback found no additional results.")
+
+        chat_id = str(uuid.uuid4())
+        sources = _render_sources(docs, limit=body.top_k)
+
+        yield _sse_event(
+            "meta",
+            {
+                "chat_id": chat_id,
+                "sources": sources,
+                "trace": trace,
+                "warnings": warnings,
+                "created": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        content_parts: List[str] = []
+        model = "none (retrieval-only fallback)"
+        prompt_text = ""
+
+        try:
+            from ..llm.llm_client import LLMClient
+            from ..llm.prompt_engineering import get_prompt_for_query
+
+            client = LLMClient()
+            context_texts = _build_context_texts(docs)
+            context_texts, context_truncated = _enforce_token_budget(context_texts)
+            if context_truncated:
+                yield _sse_event(
+                    "warning",
+                    {
+                        "message": (
+                            f"Retrieved context exceeded the {MAX_CONTEXT_TOKENS}-token budget; "
+                            "the least-relevant sources were dropped before generation."
+                        )
+                    },
+                )
+            messages = get_prompt_for_query(body.message, context_texts)
+            prompt_text = "\n".join(m.get("content", "") for m in messages)
+            model = getattr(client.backend, "model", model)
+
+            async for chunk in client.stream_with_messages(messages):
+                content_parts.append(chunk)
+                yield _sse_event("token", {"content": chunk})
+
+        except Exception as e:
+            yield _sse_event("error", {"message": f"LLM Error: {e}"})
+
+        content = "".join(content_parts)
+        # No provider-agnostic streaming usage API to rely on (OpenAI/Gemini
+        # report it differently, and not every chunk carries it) — reuse the
+        # same 4-chars/token heuristic as the context token budget.
+        prompt_tokens = _estimate_tokens(prompt_text) if prompt_text else 0
+        completion_tokens = _estimate_tokens(content) if content else 0
+        usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        processing_time_ms = int((datetime.now(timezone.utc) - request_start).total_seconds() * 1000)
+
+        yield _sse_event(
+            "done",
+            {
+                "chat_id": chat_id,
+                "model": model,
+                "usage": usage,
+                "processing_time_ms": processing_time_ms,
+            },
+        )
+
+        try:
+            from ..vector.pgvector_store import log_query
+
+            await asyncio.to_thread(
+                log_query,
+                query_id=chat_id,
+                query_text=body.message,
+                top_k=body.top_k,
+                used_fallback=bool(trace.get("used_fallback")),
+                retrieval_confidence=trace.get("retrieval_confidence"),
+                processing_time_ms=processing_time_ms,
+                citations=docs,
+                user_id=user_id,
+                prompt_tokens=usage.get("prompt_tokens"),
+                completion_tokens=usage.get("completion_tokens"),
+                total_tokens=usage.get("total_tokens"),
+            )
+        except Exception as e:
+            print(f"[WARN] Audit logging failed: {e}")
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/status")
 def status():
-    # Keep this super resilient (no external calls). Your tests expect keys 'llm' and 'retrieval'.
+    # Keep this super resilient (no external calls, other than a cheap local config check).
+    llm_provider = "openai" if os.getenv("OPENAI_API_KEY") else ("gemini" if os.getenv("GEMINI_API_KEY") else "none")
+    try:
+        from ..vector.pgvector_store import is_configured as pgvector_is_configured
+        pgvector_ready = pgvector_is_configured()
+    except Exception:
+        pgvector_ready = False
+
     return {
-      "llm": {"ok": True, "provider": "openai", "model_env": "OPENAI_MODEL"},
-      "retrieval": {"ok": True, "vector": "supabase/pgvector"}
+      "llm": {"ok": llm_provider != "none", "provider": llm_provider},
+      "retrieval": {
+          "ok": True,
+          "primary": "enhanced_index (JSON, local)",
+          "fallback": "supabase/pgvector" if pgvector_ready else "supabase/pgvector (not configured)",
+          "fallback_ready": pgvector_ready,
+      }
     }
 # =========================
 # Index Status Endpoints

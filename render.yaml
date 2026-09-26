@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: opsvista-backend
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/status
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-flash-lite-latest
+      - key: GEMINI_EMBEDDING_MODEL
+        value: gemini-embedding-001
+      - key: GEMINI_EMBEDDING_DIM
+        value: "1536"
+      - key: USE_MOCK_EMBEDDINGS
+        value: "false"
+      - key: GOOGLE_DRIVE_CREDENTIALS_PATH
+        value: credentials/google_credentials.json
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: RAG_QUALITY_THRESHOLD
+        value: "0.5"
+      - key: MAX_CONTEXT_TOKENS
+        value: "6000"
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.13.5"

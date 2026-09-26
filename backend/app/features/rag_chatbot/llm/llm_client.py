@@ -96,54 +96,144 @@ class OpenAILLM:
             yield f"\n[LLM Error: {e}]\n"
 
 
+class GeminiLLM:
+    """Google Gemini backend (free tier via Google AI Studio)."""
+
+    def __init__(self):
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY is not set")
+
+        from google import genai
+
+        self.client = genai.Client(api_key=api_key)
+        self.model = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
+        self.temperature = float(os.getenv("GEMINI_TEMPERATURE", "0.7"))
+        self.max_tokens = int(os.getenv("GEMINI_MAX_TOKENS", "4000"))
+
+    @staticmethod
+    def _messages_to_prompt(messages: List[Dict[str, str]]) -> str:
+        # Gemini's simple text API takes one prompt string; fold chat messages in.
+        parts = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            parts.append(content if role == "user" else f"[{role}] {content}")
+        return "\n\n".join(parts)
+
+    def complete(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        from google.genai import types
+
+        try:
+            resp = self.client.models.generate_content(
+                model=self.model,
+                contents=self._messages_to_prompt(messages),
+                config=types.GenerateContentConfig(
+                    temperature=self.temperature,
+                    max_output_tokens=self.max_tokens,
+                ),
+            )
+            content = resp.text or ""
+
+            usage_dict = None
+            usage = getattr(resp, "usage_metadata", None)
+            if usage:
+                usage_dict = {
+                    "prompt_tokens": getattr(usage, "prompt_token_count", 0) or 0,
+                    "completion_tokens": getattr(usage, "candidates_token_count", 0) or 0,
+                    "total_tokens": getattr(usage, "total_token_count", 0) or 0,
+                }
+
+            return {"content": content, "model": self.model, "usage": usage_dict}
+        except Exception as e:
+            raise RuntimeError(f"Gemini error: {e}") from e
+
+    async def stream(self, messages: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
+        from google.genai import types
+
+        try:
+            stream = self.client.models.generate_content_stream(
+                model=self.model,
+                contents=self._messages_to_prompt(messages),
+                config=types.GenerateContentConfig(
+                    temperature=self.temperature,
+                    max_output_tokens=self.max_tokens,
+                ),
+            )
+            for chunk in stream:
+                if chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            yield f"\n[LLM Error: {e}]\n"
+
+
 class LLMClient:
     """
     Wrapper class that chat.py expects to import.
     Provides a simpler interface that matches the expected API.
+
+    Provider selection: OpenAI if OPENAI_API_KEY is set, else Gemini if
+    GEMINI_API_KEY is set, else raises (caller falls back to retrieval-only
+    response, same as today).
     """
-    
+
     def __init__(self, model: Optional[str] = None):
-        self.openai_llm = OpenAILLM()
-        # Override model if provided
-        if model:
-            self.openai_llm.model = model
+        if os.getenv("OPENAI_API_KEY"):
+            self.backend = OpenAILLM()
+        elif os.getenv("GEMINI_API_KEY"):
+            self.backend = GeminiLLM()
+        else:
+            raise RuntimeError("No LLM provider configured: set OPENAI_API_KEY or GEMINI_API_KEY")
+
+        # Override model if provided (only meaningful for the active backend)
+        if model and os.getenv("OPENAI_API_KEY"):
+            self.backend.model = model
+
         self.last_usage = None
-    
+
     async def complete(self, prompt: str) -> str:
         """
         Simple completion method that takes a string prompt
         and returns just the content string.
         """
         messages = [{"role": "user", "content": prompt}]
-        result = self.openai_llm.complete(messages)
+        result = self.backend.complete(messages)
         self.last_usage = result.get("usage")
         return result["content"]
-    
+
     def complete_sync(self, prompt: str) -> str:
         """
         Synchronous version for backward compatibility
         """
         messages = [{"role": "user", "content": prompt}]
-        result = self.openai_llm.complete(messages)
+        result = self.backend.complete(messages)
         self.last_usage = result.get("usage")
         return result["content"]
-    
+
     async def complete_with_messages(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """
         Full completion method that returns complete response
         """
-        result = self.openai_llm.complete(messages)
+        result = self.backend.complete(messages)
         self.last_usage = result.get("usage")
         return result
-    
+
     async def stream(self, prompt: str) -> AsyncGenerator[str, None]:
         """
         Streaming completion
         """
         messages = [{"role": "user", "content": prompt}]
-        async for chunk in self.openai_llm.stream(messages):
+        async for chunk in self.backend.stream(messages):
+            yield chunk
+
+    async def stream_with_messages(self, messages: List[Dict[str, str]]) -> AsyncGenerator[str, None]:
+        """
+        Streaming completion from a full chat-message list (system + user),
+        matching complete_with_messages's input shape.
+        """
+        async for chunk in self.backend.stream(messages):
             yield chunk
 
 
 # For backward compatibility, export both classes
-__all__ = ["OpenAILLM", "LLMClient"]
+__all__ = ["OpenAILLM", "GeminiLLM", "LLMClient"]

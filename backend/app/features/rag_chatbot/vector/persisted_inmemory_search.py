@@ -50,6 +50,107 @@ def _hash_to_vector(text: str, dim: int = _MOCK_DIM) -> List[float]:
     
     return vector
 
+
+def _embed_many_openai_impl(texts: List[str]) -> List[List[float]]:
+    from openai import OpenAI
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    embeddings = []
+    batch_size = 100  # Adjust based on your rate limits
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        resp = client.embeddings.create(model=_EMBED_MODEL, input=batch)
+        embeddings.extend([d.embedding for d in resp.data])
+
+        # Brief pause between batches to respect rate limits
+        if i + batch_size < len(texts):
+            import time
+            time.sleep(0.1)
+
+    print(f"[INFO] Generated {len(embeddings)} OpenAI embeddings")
+    return embeddings
+
+
+def _embed_many_gemini_impl(texts: List[str]) -> List[List[float]]:
+    from google import genai
+    from google.genai import types
+
+    import time
+
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    model = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
+    # gemini-embedding-001 defaults to 3072 dims, which exceeds pgvector's
+    # 2000-dim cap for ivfflat/hnsw indexes. Request a smaller output
+    # dimension (Matryoshka representation learning) so the same vectors are
+    # usable for both the JSON index and an indexed pgvector fallback.
+    output_dim = int(os.getenv("GEMINI_EMBEDDING_DIM", "1536"))
+
+    # Conservative batch size + retry/backoff on 429s: the free tier has
+    # fairly tight rate limits (requests/minute), and a bare 429 should
+    # slow down and retry rather than silently abandon the whole batch.
+    embeddings: List[List[float]] = []
+    batch_size = int(os.getenv("GEMINI_EMBED_BATCH_SIZE", "10"))
+    inter_batch_delay = float(os.getenv("GEMINI_EMBED_DELAY_SECONDS", "2.0"))
+    max_retries = 5
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        for attempt in range(max_retries):
+            try:
+                resp = client.models.embed_content(
+                    model=model,
+                    contents=batch,
+                    config=types.EmbedContentConfig(output_dimensionality=output_dim),
+                )
+                embeddings.extend([e.values for e in resp.embeddings])
+                break
+            except Exception as e:
+                is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+                if is_rate_limit and attempt < max_retries - 1:
+                    backoff = inter_batch_delay * (2 ** attempt)
+                    print(f"[WARN] Gemini rate limited (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.0f}s...")
+                    time.sleep(backoff)
+                    continue
+                raise
+
+        if i + batch_size < len(texts):
+            time.sleep(inter_batch_delay)
+
+    print(f"[INFO] Generated {len(embeddings)} Gemini embeddings ({model})")
+    return embeddings
+
+
+def embed_texts(texts: List[str], use_mock: Optional[bool] = None) -> List[List[float]]:
+    """
+    Shared embedding entry point: provider priority OpenAI > Gemini > mock.
+    Used by both the primary index (PersistedInMemorySearch) and the
+    pgvector fallback (pgvector_store.py) so both paths embed queries in the
+    exact same vector space — otherwise their similarity scores would not be
+    comparable and the fallback would silently return garbage.
+    """
+    if use_mock is None:
+        has_api_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY"))
+        use_mock = os.getenv("USE_MOCK_EMBEDDINGS", "false" if has_api_key else "true").lower() in ("true", "1", "yes")
+
+    if not use_mock and os.getenv("OPENAI_API_KEY"):
+        try:
+            return _embed_many_openai_impl(texts)
+        except Exception as e:
+            print(f"[WARN] OpenAI embedding failed: {e}. Falling back to mock embeddings.")
+            return [_hash_to_vector(text) for text in texts]
+
+    if not use_mock and os.getenv("GEMINI_API_KEY"):
+        try:
+            return _embed_many_gemini_impl(texts)
+        except Exception as e:
+            print(f"[WARN] Gemini embedding failed: {e}. Falling back to mock embeddings.")
+            return [_hash_to_vector(text) for text in texts]
+
+    print(f"[INFO] Using mock embeddings for {len(texts)} texts")
+    return [_hash_to_vector(text) for text in texts]
+
+
 class PersistedInMemorySearch:
     """
     Tiny file-backed vector store for quick RAG bring-up.
@@ -68,46 +169,19 @@ class PersistedInMemorySearch:
             # Use enhanced_index.json as default, not index.json
             index_path = Path(__file__).resolve().parent / "enhanced_index.json"
         self.index_path = Path(index_path)
-        # Use real embeddings by default if API key is available, otherwise mock
-        has_api_key = bool(os.getenv("OPENAI_API_KEY"))
+        # Use real embeddings by default if a provider key is available, otherwise mock
+        has_api_key = bool(os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY"))
         use_mock_env = os.getenv("USE_MOCK_EMBEDDINGS", "false" if has_api_key else "true").lower()
         self.use_mock = use_mock_env in ("true", "1", "yes")
         
         self._load_if_exists()
 
     def _embed_many(self, texts: List[str]) -> List[List[float]]:
-        """
-        Generate embeddings for texts. Now uses OpenAI by default when API key is available.
-        """
-        # Check if we should use real OpenAI embeddings
-        if not self.use_mock and os.getenv("OPENAI_API_KEY"):
-            try:
-                from openai import OpenAI
-                client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-                
-                # Batch process to handle rate limits
-                embeddings = []
-                batch_size = 100  # Adjust based on your rate limits
-                
-                for i in range(0, len(texts), batch_size):
-                    batch = texts[i:i + batch_size]
-                    resp = client.embeddings.create(model=_EMBED_MODEL, input=batch)
-                    embeddings.extend([d.embedding for d in resp.data])
-                    
-                    # Brief pause between batches to respect rate limits
-                    if i + batch_size < len(texts):
-                        import time
-                        time.sleep(0.1)
-                
-                print(f"[INFO] Generated {len(embeddings)} OpenAI embeddings")
-                return embeddings
-                
-            except Exception as e:
-                print(f"[WARN] OpenAI embedding failed: {e}. Falling back to mock embeddings.")
-                return [_hash_to_vector(text) for text in texts]
-        else:
-            print(f"[INFO] Using mock embeddings for {len(texts)} texts")
-            return [_hash_to_vector(text) for text in texts]
+        """Generate embeddings for texts. Delegates to the module-level
+        embed_texts() so the pgvector fallback path (pgvector_store.py) uses
+        the exact same provider/model — otherwise primary and fallback
+        results would live in incompatible vector spaces."""
+        return embed_texts(texts, use_mock=self.use_mock)
 
     def _save(self):
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -195,6 +269,6 @@ class PersistedInMemorySearch:
             "total_documents": len(self.items),
             "embedding_dimension": self.dim,
             "index_file": str(self.index_path),
-            "using_mock_embeddings": self.use_mock or not os.getenv("OPENAI_API_KEY"),
+            "using_mock_embeddings": self.use_mock or not (os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")),
             "index_size_kb": round(self.index_path.stat().st_size / 1024, 2) if self.index_path.exists() else 0
         }

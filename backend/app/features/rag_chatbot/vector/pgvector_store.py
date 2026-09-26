@@ -1,0 +1,403 @@
+"""
+backend/app/features/rag_chatbot/vector/pgvector_store.py
+
+The real pgvector-backed fallback path described in the RAG documentation's
+dual-path retrieval design (enhanced_index.json = primary, pgvector =
+fallback) and the Development Specification's Supabase schema
+(dim_document/fact_chunk/fact_embedding/fact_query/bridge_query_citation).
+
+This replaces the previously-dormant integrated_search_system.py /
+search_integration.py scaffolding, which never actually implemented a vector
+backend (see backend/sql/schema.sql for the table/RPC definitions this
+module talks to).
+
+Two responsibilities:
+  1. upsert_documents(documents) — dual-write: called right after the JSON
+     index is (re)built, so pgvector always has the same corpus as
+     enhanced_index.json, not a stale or empty copy.
+  2. pgvector_search(query, top_k) — the actual fallback query, used by
+     chat.py when the primary (JSON) index returns nothing or low-confidence
+     results.
+
+Everything here is best-effort: if Supabase isn't configured yet (no
+SUPABASE_URL/SERVICE_ROLE_KEY) or the schema hasn't been applied, functions
+degrade to returning empty/zero rather than raising, so the primary path
+keeps working regardless.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from typing import Any, Dict, List, Optional
+
+from .persisted_inmemory_search import embed_texts
+
+logger = logging.getLogger(__name__)
+
+
+def _get_service_client():
+    """Lazy import + construct so this module never fails to import even
+    without Supabase configured, and always reads current env (not whatever
+    was cached at process start)."""
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
+    if not url or not key or "placeholder" in url:
+        return None
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception as e:
+        logger.warning(f"Could not create Supabase client: {e}")
+        return None
+
+
+def is_configured() -> bool:
+    return _get_service_client() is not None
+
+
+def get_service_client():
+    """Public accessor for other modules (e.g. admin_metrics.py) that need
+    the raw Supabase client for queries beyond what this module exposes."""
+    return _get_service_client()
+
+
+def _document_source_path(metadata: Dict[str, Any]) -> str:
+    """Stable unique key for a document, independent of source (Drive vs local)."""
+    if metadata.get("drive_file_id"):
+        return str(metadata["drive_file_id"])
+    return f"{metadata.get('owner_folder', '')}/{metadata.get('file_name', 'unknown')}"
+
+
+def upsert_documents(documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Dual-write path: takes chunk dicts shaped like PersistedInMemorySearch's
+    `items` — [{id, text, metadata, vector?}] — and upserts dim_document /
+    fact_chunk / fact_embedding rows in Supabase. If a chunk already carries
+    a precomputed "vector" (e.g. passed straight from index.items after
+    PersistedInMemorySearch.ingest_documents() already embedded it), that
+    vector is reused instead of re-embedding — otherwise every dual-write
+    would silently double the embedding API calls/cost of every index build.
+
+    Returns a small stats dict; never raises (logs and returns partial
+    results on failure) so a Supabase outage never blocks the primary
+    JSON-index build.
+    """
+    client = _get_service_client()
+    if client is None:
+        logger.info("[pgvector] Supabase not configured — skipping dual-write.")
+        return {"skipped": True, "documents": 0, "chunks": 0, "embeddings": 0}
+
+    # Group chunks by their parent document so we upsert each document once.
+    by_doc: Dict[str, List[Dict[str, Any]]] = {}
+    for doc in documents:
+        meta = doc.get("metadata", {})
+        key = _document_source_path(meta)
+        by_doc.setdefault(key, []).append(doc)
+
+    stats = {"documents": 0, "chunks": 0, "embeddings": 0, "errors": 0}
+
+    for source_path, chunks in by_doc.items():
+        first_meta = chunks[0].get("metadata", {})
+        source_type = first_meta.get("source", "unknown")
+
+        try:
+            doc_row = (
+                client.table("dim_document")
+                .upsert(
+                    {
+                        "source_type": source_type,
+                        "source_path": source_path,
+                        "title": first_meta.get("title"),
+                        "department": first_meta.get("department"),
+                        "last_modified_at": first_meta.get("modified_time"),
+                        "is_active": True,
+                    },
+                    on_conflict="source_type,source_path",
+                )
+                .execute()
+            )
+            if not doc_row.data:
+                # Some client versions don't return representation on upsert; fetch explicitly.
+                doc_row = (
+                    client.table("dim_document")
+                    .select("document_id")
+                    .eq("source_type", source_type)
+                    .eq("source_path", source_path)
+                    .limit(1)
+                    .execute()
+                )
+            document_id = doc_row.data[0]["document_id"]
+            stats["documents"] += 1
+        except Exception as e:
+            logger.warning(f"[pgvector] Failed to upsert document '{source_path}': {e}")
+            stats["errors"] += 1
+            continue
+
+        precomputed = [c.get("vector") for c in chunks]
+        if all(v is not None for v in precomputed):
+            vectors = precomputed
+        else:
+            texts = [c.get("text", "") for c in chunks]
+            try:
+                vectors = embed_texts(texts)
+            except Exception as e:
+                logger.warning(f"[pgvector] Embedding failed for '{source_path}': {e}")
+                stats["errors"] += 1
+                continue
+
+        for chunk, vector in zip(chunks, vectors):
+            meta = chunk.get("metadata", {})
+            ordinal = meta.get("chunk_index", 0)
+            try:
+                chunk_row = (
+                    client.table("fact_chunk")
+                    .upsert(
+                        {
+                            "document_id": document_id,
+                            "ordinal": ordinal,
+                            "text": chunk.get("text", ""),
+                            "metadata": meta,
+                        },
+                        on_conflict="document_id,ordinal",
+                    )
+                    .execute()
+                )
+                if not chunk_row.data:
+                    chunk_row = (
+                        client.table("fact_chunk")
+                        .select("chunk_id")
+                        .eq("document_id", document_id)
+                        .eq("ordinal", ordinal)
+                        .limit(1)
+                        .execute()
+                    )
+                chunk_id = chunk_row.data[0]["chunk_id"]
+                stats["chunks"] += 1
+
+                client.table("fact_embedding").upsert(
+                    {
+                        "chunk_id": chunk_id,
+                        "model": os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"),
+                        "dim": len(vector),
+                        "embedding": vector,
+                    },
+                    on_conflict="chunk_id",
+                ).execute()
+                stats["embeddings"] += 1
+            except Exception as e:
+                logger.warning(f"[pgvector] Failed to upsert chunk (doc={source_path}, ordinal={ordinal}): {e}")
+                stats["errors"] += 1
+
+    return stats
+
+
+def pgvector_search(query: str, top_k: int = 4) -> List[Dict[str, Any]]:
+    """
+    Real fallback retrieval via Postgres/pgvector cosine similarity, called
+    when the primary enhanced_index.json path returns nothing or low-
+    confidence results. Returns the same normalized shape chat.py's
+    _norm_one() already understands: [{text, score, metadata}].
+    """
+    client = _get_service_client()
+    if client is None:
+        return []
+
+    try:
+        vectors = embed_texts([query])
+        query_embedding = vectors[0]
+    except Exception as e:
+        logger.warning(f"[pgvector] Query embedding failed: {e}")
+        return []
+
+    try:
+        resp = client.rpc(
+            "match_chunks",
+            {"query_embedding": json.dumps(query_embedding), "match_count": top_k},
+        ).execute()
+    except Exception as e:
+        logger.warning(f"[pgvector] match_chunks RPC failed: {e}")
+        return []
+
+    results = []
+    for row in resp.data or []:
+        results.append(
+            {
+                "text": row.get("text", ""),
+                "score": float(row.get("similarity") or 0.0),
+                "metadata": {
+                    **(row.get("metadata") or {}),
+                    "title": row.get("title"),
+                    "department": row.get("department"),
+                    "source": row.get("source_type"),
+                    "pgvector_fallback": True,
+                },
+            }
+        )
+    return results
+
+
+def log_query(
+    *,
+    query_id: str,
+    query_text: str,
+    top_k: int,
+    used_fallback: bool,
+    retrieval_confidence: Optional[float],
+    processing_time_ms: int,
+    citations: List[Dict[str, Any]],
+    user_id: Optional[str] = None,
+    prompt_tokens: Optional[int] = None,
+    completion_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
+) -> bool:
+    """
+    Audit logging per the spec's operational-transparency requirement:
+    every chat request writes a fact_query row plus one bridge_query_citation
+    row per cited source. Best-effort — logging failures never affect the
+    chat response itself.
+
+    `citations` is the same normalized doc list used to render sources:
+    [{"text", "score", "metadata": {"file_name"/"drive_file_id"/...}}].
+    Document/chunk identity is resolved by the same (source_type,
+    source_path) key used in upsert_documents(), so citations correctly link
+    back to dim_document/fact_chunk rows written during ingestion.
+    """
+    client = _get_service_client()
+    if client is None:
+        return False
+
+    try:
+        client.table("fact_query").insert(
+            {
+                "query_id": query_id,
+                "user_id": user_id,
+                "query_text": query_text,
+                "top_k": top_k,
+                "used_fallback": used_fallback,
+                "retrieval_confidence": retrieval_confidence,
+                "processing_time_ms": processing_time_ms,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
+        ).execute()
+    except Exception as e:
+        logger.warning(f"[pgvector] Failed to log fact_query: {e}")
+        return False
+
+    for rank, doc in enumerate(citations, start=1):
+        meta = doc.get("metadata", {})
+        source_path = _document_source_path(meta)
+        source_type = meta.get("source", "unknown")
+        try:
+            doc_row = (
+                client.table("dim_document")
+                .select("document_id")
+                .eq("source_type", source_type)
+                .eq("source_path", source_path)
+                .limit(1)
+                .execute()
+            )
+            if not doc_row.data:
+                continue
+            document_id = doc_row.data[0]["document_id"]
+
+            ordinal = meta.get("chunk_index", 0)
+            chunk_row = (
+                client.table("fact_chunk")
+                .select("chunk_id")
+                .eq("document_id", document_id)
+                .eq("ordinal", ordinal)
+                .limit(1)
+                .execute()
+            )
+            if not chunk_row.data:
+                continue
+            chunk_id = chunk_row.data[0]["chunk_id"]
+
+            client.table("bridge_query_citation").insert(
+                {
+                    "query_id": query_id,
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
+                    "relevance_score": doc.get("score", 0.0),
+                    "rank": rank,
+                }
+            ).execute()
+        except Exception as e:
+            logger.warning(f"[pgvector] Failed to log citation (rank={rank}): {e}")
+
+    return True
+
+
+def hydrate_index_from_supabase() -> Optional[Dict[str, Any]]:
+    """
+    Rebuild the enhanced_index.json contents (the {"dim", "items"} shape
+    PersistedInMemorySearch reads) directly from Supabase, without touching
+    Google Drive or re-embedding anything.
+
+    Exists specifically for platforms with ephemeral local disk (e.g. Render
+    on restart/redeploy): since every chunk + embedding is already
+    dual-written to Supabase at ingest time, the JSON index is fully
+    reconstructable from there — no need to re-scan Drive just because a
+    process restart wiped the local file.
+
+    Returns None if Supabase isn't configured or there's nothing to hydrate;
+    the caller (main.py's startup) falls back to its existing "no index yet"
+    behavior in that case.
+    """
+    client = _get_service_client()
+    if client is None:
+        return None
+
+    items: List[Dict[str, Any]] = []
+    page_size = 500
+    offset = 0
+
+    try:
+        while True:
+            resp = (
+                client.table("fact_chunk")
+                .select("chunk_id, text, metadata, fact_embedding(embedding)")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                break
+
+            for row in rows:
+                embedding_rows = row.get("fact_embedding")
+                if isinstance(embedding_rows, list):
+                    embedding_row = embedding_rows[0] if embedding_rows else None
+                else:
+                    embedding_row = embedding_rows
+                if not embedding_row:
+                    continue
+
+                raw_vector = embedding_row.get("embedding")
+                vector = json.loads(raw_vector) if isinstance(raw_vector, str) else raw_vector
+                if not vector:
+                    continue
+
+                items.append(
+                    {
+                        "id": row["chunk_id"],
+                        "text": row.get("text", ""),
+                        "metadata": row.get("metadata") or {},
+                        "vector": vector,
+                    }
+                )
+
+            if len(rows) < page_size:
+                break
+            offset += page_size
+    except Exception as e:
+        logger.warning(f"[pgvector] Failed to hydrate index from Supabase: {e}")
+        return None
+
+    if not items:
+        return None
+
+    return {"dim": len(items[0]["vector"]), "items": items}

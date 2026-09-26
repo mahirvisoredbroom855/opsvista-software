@@ -1,16 +1,30 @@
 # backend/app/main.py
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.responses import RedirectResponse
+
+from app.core.rate_limit import limiter
+
+# Load repo-root .env into os.environ before anything else. Several modules
+# (persisted_inmemory_search.py, llm_client.py) read OPENAI_API_KEY /
+# GEMINI_API_KEY / USE_MOCK_EMBEDDINGS via os.getenv() directly rather than
+# through app.core.config's pydantic Settings, so without this they'd never
+# see values from .env at all.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -67,7 +81,6 @@ def _cors_origins_from_env() -> list[str]:
 async def lifespan(app: FastAPI):
     logger.info("Starting OpsVista application…")
     try:
-        # Minimal, non-failing startup checks (no external calls)
         idx = _find_enhanced_index()
         if idx:
             startup_results["chat_system"] = {
@@ -77,12 +90,37 @@ async def lifespan(app: FastAPI):
             }
             logger.info("Enhanced index located at %s", idx)
         else:
-            startup_results["chat_system"] = {
-                "status": "fallback",
-                "message": "No enhanced index found, using fallback search",
-                "suggestion": "Run gdrive_to_enhanced_index.py to create embeddings",
-            }
-            logger.warning("Enhanced index not found; starting in fallback mode")
+            # Local disk is ephemeral on platforms like Render — a restart or
+            # redeploy wipes enhanced_index.json even though the same data is
+            # already sitting in Supabase (dual-written at ingest time).
+            # Rehydrate from there instead of booting with an empty index.
+            logger.warning("Enhanced index not found locally; attempting to hydrate from Supabase…")
+            hydrated = None
+            try:
+                from app.features.rag_chatbot.vector.pgvector_store import hydrate_index_from_supabase
+
+                hydrated = hydrate_index_from_supabase()
+            except Exception:
+                logger.exception("Hydration from Supabase failed")
+
+            if hydrated:
+                target = VECTOR_DIR / "enhanced_index.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "w", encoding="utf-8") as f:
+                    json.dump(hydrated, f)
+                startup_results["chat_system"] = {
+                    "status": "ready",
+                    "message": f"Rehydrated enhanced index from Supabase ({len(hydrated['items'])} chunks)",
+                    "index_path": str(target),
+                }
+                logger.info("Rehydrated enhanced index from Supabase: %d chunks at %s", len(hydrated["items"]), target)
+            else:
+                startup_results["chat_system"] = {
+                    "status": "fallback",
+                    "message": "No enhanced index found, using fallback search",
+                    "suggestion": "Run gdrive_to_enhanced_index.py to create embeddings",
+                }
+                logger.warning("Enhanced index not found and Supabase hydration unavailable; starting in fallback mode")
     except Exception as e:
         logger.exception("Chat system initialization failed")
         startup_results["chat_system"] = {"status": "failed", "error": str(e)}
@@ -104,6 +142,11 @@ def create_app() -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
+
+    # --- Rate limiting (per-IP; see app/core/rate_limit.py for the shared instance) ---
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
 
     # --- CORS ---
     allow_origins = _cors_origins_from_env()
@@ -139,6 +182,19 @@ def create_app() -> FastAPI:
 
     app.include_router(chat_router)
     logger.info("Chat router included at /api/rag/chat/*")
+
+    # Admin metrics router (observability dashboard backend)
+    try:
+        from app.features.rag_chatbot.api.admin_metrics import router as admin_metrics_router
+        app.include_router(admin_metrics_router)
+        logger.info("Admin metrics router included at /api/rag/admin/*")
+    except ModuleNotFoundError:
+        try:
+            from backend.app.features.rag_chatbot.api.admin_metrics import router as admin_metrics_router  # type: ignore
+            app.include_router(admin_metrics_router)
+            logger.info("Admin metrics router included (backend.* path)")
+        except Exception as e:
+            logger.info("Admin metrics router not available: %s", e)
 
     # Optional discovery router
     try:

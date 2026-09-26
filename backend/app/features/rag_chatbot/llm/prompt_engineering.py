@@ -33,19 +33,35 @@ OPERATING PRINCIPLES
 SOURCES & RELIABILITY
 - Base answers on provided context. **Do not invent** figures.
 - If making calculations or inferences, state assumptions briefly.
-- When citing, refer to documents by bracketed tags like **[D1]**, **[D2]** matching the context pack.
+- Refer to documents naturally by their real title or filename when it helps
+  the reader (e.g. "According to the Profit and Loss Statement, ..."). Never
+  use abstract bracket markers like [D1], [1], [2, 3] — the interface already
+  shows the full source documents as separate citation cards below your
+  answer, so do NOT write your own "Sources" section or reference list.
 
-LENGTH POLICY (Adaptive)
-- **Lookup / factual / status** → be concise (3–6 sentences or a short list).
-- **Analytical / comparative / calculation** → provide a fuller, structured answer (typically 120–250 words).
-- If the user explicitly asks for “short” or “long,” follow their preference.
+LENGTH & DEPTH POLICY (Adaptive) — answers must always be descriptive and
+easy to understand, never a single terse fragment
+- **Lookup / factual / status** → a complete, clear answer (4–8 sentences or
+  a short structured list) — enough for the reader to fully understand the
+  answer without needing to open the source document.
+- **Analytical / comparative / calculation** → a thorough, structured answer
+  (roughly 200–350 words) that explains the "why", not just the number.
+- **General / mixed** → descriptive and complete (8–12 sentences), covering
+  relevant context, not just the bare fact.
+- If the user explicitly asks for "short" or "long," follow their preference
+  instead of the defaults above.
 
 OUTPUT FORMAT (when relevant)
 - **Summary** (1–3 lines)
-- **Details / Findings** (bullets or small table if helpful)
+- **Details / Findings** (bullets or a small Markdown table if helpful)
 - **Calculations / Assumptions** (only key steps, no internal chain-of-thought)
-- **Sources** as [D#]
 - **Next steps** (optional)
+
+FORMATTING CONSTRAINTS
+- Plain Markdown only (headings, **bold**, bullets, tables). The renderer
+  does NOT support LaTeX/math notation — never use $$...$$, \\frac{}{}, or
+  similar. Write calculations as plain arithmetic instead, e.g.
+  "BDT 55,050,000 − BDT 53,100,000 = BDT 1,950,000 (+3.7%)".
 """
 
 
@@ -65,20 +81,22 @@ class PromptIntegrator:
         self.max_context_length = 4000  # characters
 
     def __call__(self, document_texts: List[str]) -> str:
-        """Integrate document texts into a coherent context block."""
+        """
+        Integrate document texts into a coherent context block. Each entry in
+        document_texts is expected to already carry its own identifying
+        header (title/department/source) so the model can refer to it by
+        name rather than needing an abstract [D#] label.
+        """
         if not document_texts:
             return "No relevant documents found."
 
-        # Build a compact, labeled pack: [D1], [D2], …
-        combined: List[str] = []
-        combined.append("Context Pack (cite as [D1], [D2], … in your answer):")
+        combined: List[str] = ["Context (retrieved documents):"]
 
-        for i, text in enumerate(document_texts[:5], 1):  # limit to top 5 docs
-            # Light trimming: keep the beginning (usually most informative)
+        for text in document_texts[:5]:  # limit to top 5 docs
             snippet = text.strip()
-            if len(snippet) > 800:
-                snippet = snippet[:800].rstrip() + "…"
-            combined.append(f"\n[D{i}] — Document {i}\n{snippet}")
+            if len(snippet) > 900:
+                snippet = snippet[:900].rstrip() + "…"
+            combined.append(f"\n---\n{snippet}")
 
         full_context = "\n".join(combined)
 
@@ -108,20 +126,20 @@ def _classify_query(query: str) -> Dict[str, Any]:
     if _ANALYTICAL_RE.search(query or ""):
         return {
             "intent": "analytical",
-            "length_hint": "Provide a structured analysis (~120–250 words).",
-            "sections": ["Summary", "Details / Findings", "Calculations / Assumptions", "Sources"],
+            "length_hint": "Provide a thorough, structured analysis (~200–350 words) that explains the 'why', not just the number.",
+            "sections": ["Summary", "Details / Findings", "Calculations / Assumptions"],
         }
     if _LOOKUP_RE.search(query or ""):
         return {
             "intent": "lookup",
-            "length_hint": "Be concise (3–6 sentences or a short list).",
-            "sections": ["Answer", "Sources"],
+            "length_hint": "Give a complete, easy-to-understand answer (4–8 sentences or a short structured list) — never a single bare fragment.",
+            "sections": ["Answer"],
         }
     # default / mixed
     return {
         "intent": "general",
-        "length_hint": "Balanced detail (5–8 sentences).",
-        "sections": ["Summary", "Details", "Sources"],
+        "length_hint": "Descriptive and complete (8–12 sentences), covering relevant context, not just the bare fact.",
+        "sections": ["Summary", "Details"],
     }
 
 
@@ -156,9 +174,11 @@ Relevant Context:
 
 Answering Directives:
 - {directive['length_hint']}
-- Use Markdown where helpful. Prefer bullet points over long paragraphs.
-- Include sections: {sections}.
-- Cite documents explicitly using [D1], [D2], etc., matching the context pack.
+- Use Markdown where helpful (headings, bold, bullet points, small tables) —
+  never return a single flat line of text.
+- Cover: {sections}.
+- Refer to source documents by their real name when useful; never use
+  abstract markers like [D1] or [1] — do not write your own "Sources" list.
 - If data is missing or ambiguous, say so and suggest the next step.
 - Do not invent figures; if you perform calculations, show only key steps and final numbers.
 

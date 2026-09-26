@@ -47,8 +47,10 @@ class GoogleDriveEnhancedEmbedder:
         # Initialize processing pipeline
         self.processor = DocumentProcessingOrchestrator()
         
-        # Output path for enhanced index
-        self.output_path = Path(output_index or "backend/app/features/rag_chatbot/vector/enhanced_index.json")
+        # Output path for enhanced index, resolved relative to this file so it
+        # lands in the same place regardless of the cwd the script is run from.
+        default_output = Path(__file__).resolve().parent / "app/features/rag_chatbot/vector/enhanced_index.json"
+        self.output_path = Path(output_index) if output_index else default_output
         
         # Ensure output directory exists
         self.output_path.parent.mkdir(parents=True, exist_ok=True)

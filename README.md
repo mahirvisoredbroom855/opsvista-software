@@ -1,685 +1,455 @@
-# OpsVista — Retrieval-Augmented Generation Platform
+# OpsVista — RAG Knowledge Assistant
 
 <p align="center">
   <img src="pictures/logo.png" alt="OpsVista" height="72">
 </p>
 
-<h3 align="center">Intelligent, citation-backed answers over internal documents</h3>
+<h3 align="center">Ask questions about your company's documents. Get cited, grounded answers.</h3>
 <p align="center">
-  Enterprise RAG solution for <strong>Precision Textile Industry LTD (PTIL)</strong>
-</p>
-
-<p align="center">
-  <a href="https://www.python.org/">
-    <img src="https://img.shields.io/badge/Python-3.11+-blue.svg" alt="Python">
-  </a>
-  <a href="https://fastapi.tiangolo.com/">
-    <img src="https://img.shields.io/badge/FastAPI-Framework-green.svg" alt="FastAPI">
-  </a>
-  <a href="https://nextjs.org/">
-    <img src="https://img.shields.io/badge/Next.js-Frontend-black.svg" alt="Next.js">
-  </a>
-  <a href="https://supabase.com/">
-    <img src="https://img.shields.io/badge/Supabase-Backend-green.svg" alt="Supabase">
-  </a>
-  <a href="https://platform.openai.com/">
-    <img src="https://img.shields.io/badge/OpenAI-LLM-orange.svg" alt="OpenAI">
-  </a>
+  Internal knowledge assistant for <strong>Precision Textile Industry LTD (PTIL)</strong>
 </p>
 
 ---
 
-## 📋 Table of Contents
+## Tech Stack
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Key Features](#key-features)
-- [Live Environment](#live-environment)
-- [Repository Structure](#repository-structure)
-- [Prerequisites](#prerequisites)
-- [Environment Configuration](#environment-configuration)
-- [Local Development](#local-development)
-- [Building the Enhanced Index](#building-the-enhanced-index)
-- [API Documentation](#api-documentation)
-- [Frontend Application](#frontend-application)
-- [Deployment Guide](#deployment-guide)
-- [Security & Compliance](#security--compliance)
-- [Monitoring & Operations](#monitoring--operations)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [Documentation](#documentation)
-- [License](#license)
+<p align="center">
+  <img alt="Python" src="https://img.shields.io/badge/Python_3.13-3776AB?style=for-the-badge&logo=python&logoColor=white">
+  <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white">
+  <img alt="Pydantic" src="https://img.shields.io/badge/Pydantic-E92063?style=for-the-badge&logo=pydantic&logoColor=white">
+  <img alt="Uvicorn" src="https://img.shields.io/badge/Uvicorn-2C3E50?style=for-the-badge&logo=gunicorn&logoColor=white">
+</p>
+<p align="center">
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js_15-000000?style=for-the-badge&logo=nextdotjs&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React_19-61DAFB?style=for-the-badge&logo=react&logoColor=black">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white">
+  <img alt="Recharts" src="https://img.shields.io/badge/Recharts-8884d8?style=for-the-badge&logo=chartdotjs&logoColor=white">
+</p>
+<p align="center">
+  <img alt="Supabase" src="https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white">
+  <img alt="pgvector" src="https://img.shields.io/badge/pgvector-4169E1?style=for-the-badge&logo=postgresql&logoColor=white">
+</p>
+<p align="center">
+  <img alt="Gemini" src="https://img.shields.io/badge/Gemini_API-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white">
+  <img alt="OpenAI" src="https://img.shields.io/badge/OpenAI_(optional)-412991?style=for-the-badge&logo=openai&logoColor=white">
+  <img alt="Google Drive" src="https://img.shields.io/badge/Google_Drive-4285F4?style=for-the-badge&logo=googledrive&logoColor=white">
+</p>
+<p align="center">
+  <img alt="Pytest" src="https://img.shields.io/badge/Pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white">
+  <img alt="GitHub Actions" src="https://img.shields.io/badge/GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white">
+  <img alt="Render" src="https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white">
+  <img alt="Vercel" src="https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white">
+</p>
 
----
-
-## 🔍 Overview
-
-OpsVista is a production-ready **Retrieval-Augmented Generation (RAG)** platform designed to provide intelligent, contextual answers to natural language queries about internal organizational documentation. Built for Precision Textile Industry LTD, the system serves as a unified knowledge interface that consolidates scattered information sources into a searchable, citation-backed question-answering system.
-
-
----
-## 📖 Documentation
-
-### Technical Documentation
-For comprehensive technical details, architectural decisions, and implementation guides, refer to the complete documentation:
-
-**[📄 OpsVista RAG System - Technical Documentation](https://drive.google.com/file/d/16Cxo0c8fKoGjLUDq32pXRK2-sEAt_p6S/view?usp=sharing)**
-
-*This document provides in-depth coverage of:*
-- Complete architectural design patterns
-- Business requirements and value proposition analysis
-- Detailed implementation workflows
-- Security framework and compliance guidelines
-- Operational procedures and best practices
+| Category | What's used |
+|---|---|
+| **Backend runtime** | Python 3.13, FastAPI, Uvicorn, Pydantic v2, `slowapi` (rate limiting) |
+| **Frontend** | Next.js 15 (App Router), React 19, TypeScript, custom CSS (no Tailwind, despite it being scaffolded), `recharts`, `react-markdown` |
+| **Database, Auth & Vector Store** | Supabase — managed Postgres, Auth (JWT), Row Level Security, `pgvector` extension |
+| **LLM & Embeddings** | Google Gemini (`gemini-flash-lite-latest` generation, `gemini-embedding-001` embeddings) — primary; OpenAI supported as an alternate provider |
+| **Document ingestion** | Google Drive API v3, `pypdf`, `python-docx`, `pandas`/`openpyxl` |
+| **Testing** | `pytest`, `pytest-asyncio`, `pytest-mock` — 27 tests covering the real ingestion/retrieval/quality-gate pipeline |
+| **Hosting (target)** | Render (backend), Vercel (frontend) |
 
 ---
 
-### Business Impact
+## What is OpsVista?
 
-- **🎯 Unified Knowledge Access**: Consolidates information silos across departments
-- **⚡ Instant Response**: Sub-second query processing with intelligent context retrieval
-- **📚 Source Attribution**: Every response includes traceable citations to original documents
-- **🔄 Operational Resilience**: Dual-path retrieval ensures high availability
-- **📈 Scalable Architecture**: Microservices design supporting concurrent users and document growth
+OpsVista is an internal chat assistant that answers questions about PTIL's own documents — finance records, HR policies, commercial orders, maintenance logs, admin procedures — instead of employees having to dig through Google Drive folders themselves. Every answer comes with **citations** back to the real source document, so you can verify it yourself.
+
+## How it works (the simple version)
+
+1. Company documents (Excel sheets, Word docs, PDFs, policies) live in Google Drive, organized by department.
+2. A background process reads those documents, breaks them into chunks, and converts each chunk into a vector embedding — a numeric representation of its meaning.
+3. When someone asks a question, the system embeds the question the same way and finds the most semantically similar chunks.
+4. Those chunks get handed to an LLM (Gemini), which writes a plain-English answer **using only that retrieved context** — and the original chunks are shown back to the user as citations.
+5. If the primary search comes back empty or low-confidence, a second independent search (Postgres/pgvector) gets a chance to find something — this is the "dual-path" part of the design.
 
 <p align="center">
   <img src="pictures/High-Level%20System%20Architecture%20(E2E).png" alt="High-Level Architecture" width="88%">
 </p>
 
+## API at a glance
+
+| Method | Endpoint | Purpose | Auth |
+|---|---|---|---|
+| `GET` | `/api/status` | Overall app health, no external calls | Public |
+| `GET` | `/api/rag/chat/status` | LLM + retrieval provider status | Public |
+| `GET` | `/api/rag/chat/index/status` | Index metadata (size, doc count) | Public |
+| `POST` | `/api/rag/chat/complete` | Ask a question, get a cited answer (single JSON response) | Any signed-in user |
+| `POST` | `/api/rag/chat/stream` | Same pipeline, streamed as Server-Sent Events | Any signed-in user |
+| `GET` | `/api/rag/chat/_retrieve` | Debug: raw retrieval results, no LLM call | Any signed-in user |
+| `GET` | `/api/rag/admin/metrics` | Observability dashboard data | **Owner/Admin only** |
+| `POST` | `/api/rag/admin/reindex` | Trigger a full Drive re-scan + re-embed | **Owner/Admin only** |
+| `GET` | `/api/rag/admin/reindex/status` | Poll reindex progress | **Owner/Admin only** |
+
+Interactive OpenAPI docs are always available at `/docs` on a running backend.
+
 ---
 
-## 🏗️ Architecture
+# Technical Deep Dive
 
-OpsVista implements a sophisticated dual-path retrieval strategy with provider-agnostic abstractions:
+Everything below assumes the simple version above and goes further into how it's actually built, why specific decisions were made, and how to run/deploy it yourself.
 
-### Core Components
+## Dual-Path Retrieval — in detail
 
-- **🎨 Frontend Layer**: Next.js application with Supabase authentication
-- **🚀 API Gateway**: FastAPI application with comprehensive CORS and validation
-- **🔍 Retrieval Engine**: Dual-path system (Enhanced Index + Integrated Search)
-- **🧠 Generation Layer**: Provider-agnostic LLM client with advanced prompt engineering
-- **🔗 External Integrations**: OpenAI APIs, Supabase services, Google Drive
+The primary retrieval path is an **in-memory JSON index** (`enhanced_index.json`) — every chunk and its embedding vector, loaded into memory for brute-force cosine similarity search. At this corpus size (hundreds of chunks), this is genuinely faster and more accurate than an approximate-nearest-neighbor index would be.
 
-### Retrieval Decision Flow
+The fallback path is **Postgres + `pgvector`**, hosted on Supabase. It activates not just when the primary path returns literally nothing, but when its top confidence score falls below a configurable quality threshold (`RAG_QUALITY_THRESHOLD`, default `0.5`) — a genuine quality gate, not just an empty-results check.
+
 <p align="center">
-  <img src="pictures/Retrieval%20Decision%20Flow%20(Strict).png" alt="Retrieval Decision Flow" width="74%">
+  <img src="pictures/Retrieval%20Decision%20Flow%20(Strict).png" alt="Retrieval Decision Flow" width="70%">
 </p>
 
-### Response Assembly Process
+> **Note on this diagram:** it depicts the original binary "has hits?" design. The real implementation (`retrieve_with_trace()` in `chat.py`) is a superset of this — it adds confidence-threshold and source-diversity scoring on top of the same fallback structure shown here.
+
+Every response carries a `trace` object showing exactly what happened:
+
+```json
+{
+  "impl": "enhanced_index",
+  "retrieval_confidence": 0.83,
+  "source_diversity": 0.75,
+  "used_fallback": false
+}
+```
+
+### Full request sequence
+
 <p align="center">
-  <img src="pictures/Response%20Assembly%20(What%20the%20API%20returns).png" alt="Response Assembly" width="74%">
+  <img src="pictures/Chat%20Request%20Sequence%20(Alt%20paths%20shown).png" alt="Chat Request Sequence" width="90%">
 </p>
 
----
+> The fallback box in this diagram (`IntegratedSearchManager`) is drawn from an earlier design — the real fallback implementation is `pgvector_store.py`, and the primary LLM provider is Gemini, not OpenAI (OpenAI remains supported as an alternate). The request/response shape and control flow shown are otherwise accurate.
 
-## ✨ Key Features
+### Response shape
 
-### 🎯 Intelligent Retrieval
-- **Enhanced Local Index**: Sub-millisecond vector operations via `enhanced_index.json`
-- **Integrated Search Fallback**: Adapters to vector DBs, pgvector, and Drive API
-- **Quality Assessment**: Automated evaluation with fallback activation
-
-### 📊 Comprehensive Observability
-- **Health Monitoring**: Multi-level status endpoints for system, chat, and index
-- **Trace Information**: Complete request flow tracking with performance metrics
-- **Error Context**: Detailed error reporting with remediation suggestions
-
-### 🔒 Enterprise Security
-- **Authentication**: Supabase-powered user management with role-based access
-- **Data Protection**: Source attribution without sensitive content logging
-- **Audit Trails**: Comprehensive query and response logging
-
-### 🚀 Operational Excellence
-- **Provider Agnostic**: Easy switching between LLM providers
-- **Graceful Degradation**: Service continuity during external API outages
-- **Horizontal Scaling**: Stateless design supporting concurrent operations
-
----
-
-## 🌐 Live Environment
-
-> **Current Deployment URLs**
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| 🎨 **Frontend** | `https://opsvista-frontend.vercel.app` | User interface and authentication |
-| 🔗 **Backend API** | `https://opsvista-software.onrender.com` | Core API services |
-| 📊 **API Base** | `https://opsvista-software.onrender.com/api` | RESTful API endpoints |
-
----
-
-## 📁 Repository Structure
-
-```
-opsvista/
-├── 📁 backend/                           # FastAPI backend services
-│   ├── 📁 app/
-│   │   ├── 📄 main.py                    # FastAPI application entrypoint
-│   │   ├── 📁 features/
-│   │   │   └── 📁 rag_chatbot/
-│   │   │       ├── 📁 api/
-│   │   │       │   └── 📄 chat.py        # Chat endpoints (/api/rag/chat/*)
-│   │   │       ├── 📁 discovery/         # Document discovery (Drive, local)
-│   │   │       ├── 📁 processing/
-│   │   │       │   └── 📄 document_processing_engine.py
-│   │   │       ├── 📁 chunking/
-│   │   │       │   └── 📄 chunking_framework.py
-│   │   │       ├── 📁 embedding/
-│   │   │       │   └── 📄 embedding_framework.py
-│   │   │       └── 📁 vector/
-│   │   │           ├── 📄 persisted_inmemory_search.py
-│   │   │           ├── 📄 search_integration.py
-│   │   │           └── 📄 integrated_search_system.py
-│   │   ├── 📁 llm/
-│   │   │   └── 📄 llm_client.py          # Provider-agnostic LLM wrapper
-│   │   └── 📁 core/                      # Config, database, Supabase client
-│   ├── 📄 requirements.txt               # Python dependencies
-│   ├── 📄 gdrive_to_enhanced_index.py    # Batch index builder
-│   └── 📄 .env                           # Environment variables (local only)
-│
-├── 📁 frontend/                          # Next.js frontend application
-│   └── 📁 src/
-│       ├── 📁 app/
-│       │   └── 📄 page.tsx               # Main UI component
-│       └── 📁 lib/
-│           └── 📄 supabaseClient.ts      # Supabase authentication
-│
-├── 📁 pictures/                          # Documentation assets
-│   ├── 📄 logo.png
-│   ├── 📄 High-Level System Architecture (E2E).png
-│   ├── 📄 Retrieval Decision Flow (Strict).png
-│   ├── 📄 Chat Request Sequence (Alt paths shown).png
-│   ├── 📄 Response Assembly (What the API returns).png
-│   ├── 📄 Integrated Search Composition (Adapters & Clients).png
-│   ├── 📄 Data Shape (ER) for Enhanced Index + Metadata.png
-│   ├── 📄 Index Build Discovery Pipeline (Drive → Index).png
-│   ├── 📄 Infrastructure Runtime Topology.png
-│   └── 📄 Health & Diagnostics (Cheap Observability).png
-│
-└── 📄 README.md                          # This file
+```json
+{
+  "chat_id": "e0225265-...",
+  "content": "### Summary\nAccording to the Leave and Attendance Policy...",
+  "model": "gemini-flash-lite-latest",
+  "sources": [
+    {
+      "text": "Casual Leave: 10 days, requires 1 day advance notice...",
+      "score": 0.78,
+      "metadata": {
+        "file_name": "Leave_and_Attendance_Policy.md",
+        "department": "HR",
+        "source": "google_drive",
+        "drive_file_id": "1abc...",
+        "table": null
+      }
+    }
+  ],
+  "usage": { "prompt_tokens": 696, "completion_tokens": 126, "total_tokens": 822 },
+  "trace": { "impl": "enhanced_index", "retrieval_confidence": 0.78, "used_fallback": false },
+  "warnings": []
+}
 ```
 
----
-
-## 🔧 Prerequisites
-
-### System Requirements
-- **Python** ≥ 3.11
-- **Node.js** ≥ 18 with npm/pnpm
-- **Git** for version control
-
-### External Services
-- **Supabase Project** (Authentication + PostgreSQL)
-- **OpenAI API Key** (LLM + embeddings) - *optional for development with mocks*
-- **Google Drive Service Account** - *optional for Drive document sources*
-
----
-
-## ⚙️ Environment Configuration
-
-### Backend Configuration
-
-Create `backend/.env` for local development:
-
-```bash
-# 🔑 Core Services
-OPENAI_API_KEY=sk-proj-...                 # Optional for dev with mocks
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_KEY=<service-role-key>
-
-# 🌐 CORS Configuration
-CORS_ORIGINS=https://opsvista-frontend.vercel.app,https://<preview>.vercel.app
-
-# 📄 Document Sources
-GOOGLE_CREDENTIALS_PATH=/absolute/path/to/service-account.json
-
-# 🗂️ Enhanced Index Configuration
-ENHANCED_INDEX_PATH=./enhanced_index.json
-EMBEDDING_MODEL=text-embedding-3-small
-TOP_K=4
-```
-
-### Frontend Configuration
-
-Create `frontend/.env.local`:
-
-```bash
-# 🔗 API Configuration
-NEXT_PUBLIC_API_BASE_URL=https://opsvista-software.onrender.com/api
-
-# 🔐 Supabase Configuration
-NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anonymous-key>
-```
-
----
-
-## 🚀 Local Development
-
-### 1️⃣ Clone and Setup
-
-```bash
-# Clone repository
-git clone <repository-url> opsvista
-cd opsvista
-
-# Setup Python environment
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-
-# Install backend dependencies
-pip install -r backend/requirements.txt
-
-# Install frontend dependencies
-cd frontend && npm install && cd ..
-```
-
-### 2️⃣ Configure Environment
-
-Set up environment files as described in [Environment Configuration](#environment-configuration).
-
-### 3️⃣ Build Enhanced Index
-
-```bash
-# Build initial index (run from repository root with venv active)
-python backend/gdrive_to_enhanced_index.py
-```
-
-### 4️⃣ Start Backend Service
-
-```bash
-# Start FastAPI development server
-uvicorn app.main:app --app-dir backend --reload --port 8000
-
-# API available at: http://127.0.0.1:8000/api
-# Documentation: http://127.0.0.1:8000/docs
-```
-
-### 5️⃣ Start Frontend Application
-
-```bash
-# Start Next.js development server
-cd frontend
-npm run dev
-
-# UI available at: http://localhost:3000
-```
-
----
-
-## 🗂️ Building the Enhanced Index
-
-The Enhanced Index transforms documents into searchable vector representations stored in `enhanced_index.json`.
-
-### Index Build Pipeline
 <p align="center">
-  <img src="pictures/Index%20Build%20Discovery%20Pipeline.png" alt="Index Build Pipeline" width="72%">
+  <img src="pictures/Response%20Assembly%20(What%20the%20API%20returns).png" alt="Response Assembly" width="80%">
 </p>
 
-### Trigger Methods
+`warnings[]` is populated when: no documents were found, the fallback path was used, the fallback was attempted but also came up empty, or the retrieved context had to be truncated to fit the token budget (`MAX_CONTEXT_TOKENS`, default `6000`).
 
-#### 📊 Batch Script (Recommended)
-```bash
-# From repository root with virtual environment active
-python backend/gdrive_to_enhanced_index.py
-```
+### Streaming (`/api/rag/chat/stream`)
 
-#### 🔗 API Endpoint
-```bash
-curl -X POST "${API_BASE}/rag/discover" \
-  -H "Content-Type: application/json"
-```
+Retrieval works exactly like `/complete` — same dual-path logic, same quality gate — but generation is streamed back as Server-Sent Events instead of one blocking response, so the answer renders token-by-token in the UI:
 
-### Data Structure
+| Event | Payload | When |
+|---|---|---|
+| `meta` | `chat_id`, `sources`, `trace`, `warnings`, `created` | Immediately after retrieval finishes, before generation starts |
+| `token` | `content` (a text fragment) | Once per chunk the LLM provider streams back |
+| `warning` | `message` | If context had to be truncated mid-generation |
+| `error` | `message` | If generation fails after retrieval succeeded |
+| `done` | `chat_id`, `model`, `usage`, `processing_time_ms` | Once the stream ends |
+
+Both Gemini and OpenAI backends implement native token streaming (`generate_content_stream` / `chat.completions.create(stream=True)`) under `llm_client.py`. Since streamed usage accounting isn't consistently reported by either provider mid-stream, `usage` in the `done` event is estimated with the same 4-chars-per-token heuristic used for the context token budget — good enough for the audit log, not billing-grade precision. The same `fact_query`/`bridge_query_citation` audit write happens after the stream completes, identical to `/complete`.
+
+### Excel/table-aware citations
+
+Unlike flat text extraction, spreadsheet-derived chunks preserve their actual rows and columns in `metadata.table`. The frontend uses this to render a real data table **and** an auto-generated bar chart per citation — with a magnitude filter that drops incompatible-scale columns (e.g. a per-row amount vs. a cumulative running balance) so the chart doesn't render one series invisible next to the other.
+
+## Data Model
+
 <p align="center">
   <img src="pictures/Data%20Shape%20(ER)%20for%20Enhanced%20Index%20+%20Metadata.png" alt="Data Shape" width="68%">
 </p>
 
-### Processing Pipeline
+> This diagram shows the conceptual document → chunk → embedding relationship correctly, but predates two tables that now exist for real (`fact_query`, `bridge_query_citation` — the audit log) and includes a generic key/value `METADATA` table that was never implemented (metadata lives as JSONB directly on `fact_chunk`). **[`backend/sql/schema.sql`](backend/sql/schema.sql) is the authoritative, executable schema** — five tables, real RLS policies, and the `match_chunks()` pgvector search function.
 
-1. **🔍 Document Discovery**: Automated scanning of Drive and local sources
-2. **📝 Content Processing**: Multi-format support (PDF, DOCX, TXT, etc.)
-3. **✂️ Intelligent Chunking**: Semantic boundary detection with context preservation
-4. **🧠 Embedding Generation**: Vector representations via OpenAI embeddings
-5. **💾 Index Persistence**: Optimized JSON structure for rapid similarity search
+| Table | Purpose |
+|---|---|
+| `dim_document` | One row per source file (Drive or local), department, classification |
+| `fact_chunk` | Text chunks, ordinal position, full metadata (JSONB) |
+| `fact_embedding` | The actual `vector(1536)` embeddings, keyed to a chunk |
+| `fact_query` | Audit log: every question asked, confidence, latency, tokens, fallback flag |
+| `bridge_query_citation` | Which chunks were cited for which query, ranked |
+
+### Why 1536 dimensions, not Gemini's native 3072?
+
+`pgvector`'s `ivfflat`/`hnsw` indexes cap out at 2000 dimensions. Gemini's embedding model supports requesting a smaller output directly (Matryoshka representation learning) via `output_dimensionality=1536` — so the same vectors work for both the JSON index and an indexable Postgres column, at the cost of a small amount of embedding fidelity.
+
+### Why is there no ANN index on `fact_embedding` right now?
+
+`ivfflat` needs roughly `rows / 1000` clusters to behave well. At a few hundred rows, that rounds to ~0–1 — creating the index actually made retrieval *worse* in testing (found the wrong document, returned duplicates) because each cluster ended up with ~1 vector in it. Exact search is both more accurate and fast enough below roughly 1,000–10,000 rows. The threshold for adding it back is documented directly in `schema.sql`.
 
 ---
 
-## 📚 API Documentation
+## Repository Structure
 
-### Base Configuration
 ```
-API_BASE = https://opsvista-software.onrender.com/api
+opsvista-software/
+├── backend/
+│   ├── app/
+│   │   ├── main.py                          # FastAPI entrypoint, startup hydration, rate limiter wiring
+│   │   ├── core/
+│   │   │   ├── config.py                    # Pydantic Settings (dev-safe defaults)
+│   │   │   ├── auth_deps.py                 # get_current_user / require_roles (RBAC)
+│   │   │   ├── supabase_jwt.py              # Token verification via Supabase Auth API
+│   │   │   └── rate_limit.py                # Shared slowapi Limiter instance
+│   │   └── features/rag_chatbot/
+│   │       ├── api/
+│   │       │   ├── chat.py                  # /api/rag/chat/* — retrieval, quality gate, generation
+│   │       │   ├── admin_metrics.py         # /api/rag/admin/metrics
+│   │       │   └── discovery.py             # /api/rag/admin/reindex(/status)
+│   │       ├── llm/
+│   │       │   ├── llm_client.py            # Provider-agnostic (Gemini/OpenAI) LLM wrapper
+│   │       │   └── prompt_engineering.py    # System prompt + adaptive length policy
+│   │       ├── vector/
+│   │       │   ├── persisted_inmemory_search.py  # Primary JSON index + shared embed_texts()
+│   │       │   ├── pgvector_store.py             # Fallback search, dual-write, audit logging, hydration
+│   │       │   └── google_drive_service.py       # Drive API client (service account)
+│   │       └── ingestion_common.py          # Shared chunking/extraction (PDF/DOCX/XLSX/TXT/MD)
+│   ├── build_local_index.py                 # Build index from a local folder (no Drive/API key needed)
+│   ├── build_drive_index.py                 # Build index from real Google Drive
+│   ├── sql/schema.sql                        # Full Supabase schema, RLS, match_chunks() RPC
+│   ├── tests/                                # 27 pytest tests, mock embeddings, no network calls
+│   └── seed_docs/                            # Realistic dummy PTIL documents (Excel/Word/PDF/MD)
+│
+├── frontend/src/app/
+│   ├── page.tsx                              # Chat UI — conversation, citations, charts
+│   ├── login/page.tsx                        # Sign in / sign up (with name + email confirmation)
+│   ├── dashboard/page.tsx                    # Observability dashboard (Owner/Admin)
+│   └── globals.css                           # All styling — no Tailwind in actual use
+│
+└── pictures/                                 # Architecture diagrams referenced throughout this file
 ```
 
-### Health & Status Endpoints
+---
 
-#### System Health Check
-```http
-GET ${API_BASE}/status
-```
-**Response**: Overall application health without external dependencies
+## Getting Started
 
-#### Chat Service Status
-```http
-GET ${API_BASE}/rag/chat/status
-```
-**Response**: Retrieval engine and LLM provider availability
+### Prerequisites
 
-#### Enhanced Index Status
-```http
-GET ${API_BASE}/rag/chat/index/status
+- Python ≥ 3.11
+- Node.js ≥ 18
+- A Supabase project (free tier is fine) with the `vector` extension enabled
+- A Gemini API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey), free tier available) — or an OpenAI key as an alternative
+- *(Optional, for real Drive ingestion)* a Google Cloud service account with Drive API access
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/mahirvisoredbroom855/opsvista-software.git
+cd opsvista-software
+
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+cd frontend && npm install && cd ..
 ```
-**Response**: Index metadata, size, modification time, and embedding statistics
+
+### 2. Configure environment
+
+Copy `.env.example` to `.env` at the repo root and fill in:
+
+```bash
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...        # bypasses RLS — used by ingestion & audit logging
+
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-flash-lite-latest
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+GEMINI_EMBEDDING_DIM=1536             # must stay ≤2000 for pgvector indexing
+
+USE_MOCK_EMBEDDINGS=false             # true = deterministic hash vectors, zero cost/API calls
+GOOGLE_DRIVE_CREDENTIALS_PATH=backend/credentials/google_credentials.json
+CORS_ALLOWED_ORIGINS=http://localhost:3000
+```
+
+Then run `backend/sql/schema.sql` once in your Supabase project's SQL Editor.
+
+Copy `frontend/.env.local.example` (or create `frontend/.env.local`):
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+NEXT_PUBLIC_REQUIRE_AUTH=true
+```
+
+### 3. Build the index
+
+No Google Drive access yet? Use the local seed documents:
+
+```bash
+cd backend
+python build_local_index.py --reset
+```
+
+Have a real Drive service account set up and folders shared with it? See the step-by-step in this file's [Google Drive Setup](#google-drive-setup) section below, then:
+
+```bash
+python build_drive_index.py --reset
+```
+
+Either script dual-writes into Supabase automatically — no separate step needed.
+
+### 4. Run it
+
+```bash
+# Terminal 1 — backend
+cd backend && uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 — frontend
+cd frontend && npm run dev
+```
+
+Visit `http://localhost:3000`, sign up (or sign in), and start asking questions.
+
+---
+
+## Google Drive Setup
+
+1. **Google Cloud Console** → new project → enable the **Google Drive API**.
+2. **APIs & Services → Credentials** → Create Credentials → **Service Account** → create a key (JSON) → save it as `backend/credentials/google_credentials.json` (already gitignored).
+3. In Google Drive, create one parent folder containing your department subfolders, and **share only that parent folder** with the service account's email (Viewer access) — permissions cascade to everything inside.
+4. Upload documents into the matching department folders. Supported: Google Docs, `.pdf`, `.docx`, `.xlsx`, `.txt`, `.md`.
+5. Run `python build_drive_index.py --reset` (or trigger `POST /api/rag/admin/reindex` from a signed-in Owner/Admin account).
+
+---
+
+## Refreshing the Index
+
+| Method | Command / Endpoint | Notes |
+|---|---|---|
+| CLI, local docs | `python backend/build_local_index.py --reset` | No Drive/service-account needed |
+| CLI, real Drive | `python backend/build_drive_index.py --reset` | Full rescan + re-embed + dual-write |
+| API, admin-triggered | `POST /api/rag/admin/reindex` | Runs in background; requires Owner/Admin role; rate-limited to 3/min |
+
+A timestamped backup of the previous index is kept automatically (`backend/app/features/rag_chatbot/vector/backups/`, last 5 retained) before every reset.
+
+**On startup**, if `enhanced_index.json` is missing locally (e.g. after a redeploy on a host with ephemeral disk, like Render's free tier), the app automatically rehydrates it from Supabase — the same chunks and embeddings already dual-written there — rather than booting with an empty index.
+
+---
+
+## Observability & the Dashboard
 
 <p align="center">
-  <img src="pictures/Health%20%26%20Diagnostics%20(Cheap%20Observability).png" alt="Health & Diagnostics" width="66%">
+  <img src="pictures/Health%20%26%20Diagnostics%20(Cheap%20Observability).png" alt="Health & Diagnostics" width="70%">
 </p>
 
-### RAG Chat Endpoints
+Every chat request writes a row to `fact_query` (confidence, latency, tokens, fallback flag) and `bridge_query_citation` (which chunks were cited, ranked). This is real, queryable data — not just log lines.
 
-#### Complete Chat Request
-```http
-POST ${API_BASE}/rag/chat/complete
-Content-Type: application/json
-
-{
-  "message": "Summarize the onboarding policy for new textile engineers",
-  "top_k": 4,
-  "debug": true
-}
-```
-
-#### Response Structure
-```json
-{
-  "content": "Based on the onboarding documentation...",
-  "sources": [
-    {
-      "title": "Engineering Onboarding Policy",
-      "origin": "Google Drive",
-      "path": "/HR/Policies/Engineering_Onboarding_v2.pdf",
-      "relevance_score": 0.87
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 1234,
-    "completion_tokens": 567,
-    "total_tokens": 1801
-  },
-  "trace": {
-    "impl": "EnhancedIndex",
-    "index_path": "enhanced_index.json",
-    "used_fallback": false,
-    "processing_time_ms": 245,
-    "warnings": []
-  }
-}
-```
-
-### Chat Request Sequence
-<p align="center">
-  <img src="pictures/Chat%20Request%20Sequence%20(Alt%20paths%20shown).png" alt="Chat Request Sequence" width="86%">
-</p>
+Three ways to look at it:
+1. **The dashboard** — `/dashboard` in the frontend (Owner/Admin only): query volume, latency (avg/p95), fallback rate, token usage, top cited documents/departments, recent query log.
+2. **Supabase Studio** — Table Editor on `fact_query` / `bridge_query_citation` for raw data.
+3. **Backend logs** — `tail -f` wherever you redirect uvicorn's output; on Render, its built-in log viewer shows the same thing automatically.
 
 ---
 
-## 🎨 Frontend Application
+## Security
 
-### Core Components
-
-#### Main Interface
-- **Location**: `frontend/src/app/page.tsx`
-- **Features**: Chat UI, response rendering, citation display, trace information
-- **Styling**: Tailwind CSS with responsive design
-
-#### Authentication Client
-- **Location**: `frontend/src/lib/supabaseClient.ts`
-- **Features**: User sign-in/sign-up, session management, protected routes
-
-### Key Features
-
-- **💬 Intelligent Chat Interface**: Natural language query processing
-- **📋 Citation Display**: Interactive source links with relevance scores
-- **🔍 Trace Information**: Processing details for debugging and optimization
-- **🔐 Secure Authentication**: Supabase-powered user management
-- **📱 Responsive Design**: Optimized for desktop and mobile devices
+- **Auth**: Supabase Auth (email/password), JWTs verified server-side against Supabase's own Auth API (not a locally-held signing secret — robust across Supabase's key-format changes).
+- **RBAC**: `require_roles(["Owner", "Admin"])` gates the admin dashboard and reindex trigger. Regular chat access requires only a valid session — any signed-in employee can ask questions. Grant a role via:
+  ```python
+  supabase.auth.admin.update_user_by_id(user_id, {"app_metadata": {"role": "Owner"}})
+  ```
+- **Row Level Security**: enabled on all 5 tables. The knowledge corpus (`dim_document`/`fact_chunk`/`fact_embedding`) is readable by any authenticated user, writable only via the service-role key (ingestion pipeline). Audit tables are scoped so a user can only ever see their own query history once fully wired to `auth.uid()`.
+- **Rate limiting**: per-IP via `slowapi` — 20/min on chat, 60/min on metrics, 3/min on reindex, 120/min global default.
+- **Secrets**: service-role keys, JWT secrets, and Drive credentials are never committed — see `.gitignore`.
 
 ---
 
-## 🚀 Deployment Guide
+## Testing
 
-### Infrastructure Topology
+```bash
+cd backend
+pip install -r requirements-test.txt
+pytest
+```
+
+27 tests, mock embeddings throughout (no network calls, no API cost), covering:
+- `ingestion_common.py` — chunking, PDF/DOCX/XLSX extraction against real generated fixtures
+- `persisted_inmemory_search.py` — ingest/search/persist round trips
+- `chat.py` — the quality-gate logic (`_retrieval_confidence`, `_source_diversity`, `_enforce_token_budget`), and `retrieve_with_trace()`'s dual-path branching with the retrieval functions mocked out
+- `pgvector_store.py` — config-detection logic (the real Supabase-dependent paths were verified manually against the live project rather than mocked, since faking the whole PostgREST surface would test the mock, not the code)
+
+---
+
+## Deployment
+
 <p align="center">
   <img src="pictures/Infrastructure%20Runtime%20Topology.png" alt="Infrastructure Topology" width="80%">
 </p>
 
-### Backend Deployment (Render)
+> Diagram shows "OpenAI API" — Gemini is now the primary provider (OpenAI remains supported as an alternate). Everything else matches: Vercel → Render/Uvicorn → FastAPI → Chat Router → Supabase / LLM provider / Google Drive / local index file.
 
-#### Service Configuration
-1. **Create Web Service** from `backend/` directory
-2. **Configure Build Settings**:
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+### Backend → Render
 
-#### Environment Variables
-```bash
-OPENAI_API_KEY=sk-proj-...
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_KEY=<service-role-key>
-CORS_ORIGINS=https://opsvista-frontend.vercel.app
-ENHANCED_INDEX_PATH=./enhanced_index.json
-EMBEDDING_MODEL=text-embedding-3-small
-TOP_K=4
-```
+A [`render.yaml`](render.yaml) Blueprint is included at the repo root — in the Render dashboard, **New → Blueprint**, point it at this repo, and it pre-fills the service below (you still need to fill in the `sync: false` secrets yourself in the dashboard, since Render never reads secret values from the repo).
 
-#### Health Check Configuration
-- **Health Check Path**: `/api/status`
-- **Expected Status Code**: `200`
+- **Build command**: `pip install -r requirements.txt` (repo root, not `backend/`, since that's where `requirements.txt` lives)
+- **Start command**: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- **Health check path**: `/api/status`
+- Set every variable from your `.env` as a Render secret (never commit `.env` to the repo)
+- Google Drive credentials aren't in git (see `.gitignore`) — if you want the admin-triggered reindex to work in production, upload `google_credentials.json` via Render's **Secret Files** feature at the path `GOOGLE_DRIVE_CREDENTIALS_PATH` points to. Without it, chat still works (the index hydrates from Supabase on boot); only *triggering a fresh Drive scan* needs it.
 
-### Frontend Deployment (Vercel)
+### Frontend → Vercel
 
-#### Project Setup
-1. **Import Repository** with root directory set to `frontend/`
-2. **Configure Build Settings**:
-   - **Framework Preset**: Next.js
-   - **Build Command**: `npm run build`
-   - **Output Directory**: `.next`
+- Root directory: `frontend/`
+- Framework preset: Next.js (auto-detected)
+- Set the `NEXT_PUBLIC_*` variables, pointing `NEXT_PUBLIC_API_BASE_URL` at your Render backend URL
 
-#### Environment Variables
-```bash
-NEXT_PUBLIC_API_BASE_URL=https://opsvista-software.onrender.com/api
-NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anonymous-key>
-```
+### Post-deploy checklist
 
-### Post-Deployment Checklist
-
-- [ ] **CORS Configuration**: Verify frontend domains in backend `CORS_ORIGINS`
-- [ ] **API Connectivity**: Test `/api/status` endpoint accessibility
-- [ ] **Authentication Flow**: Validate Supabase login/logout functionality
-- [ ] **Chat Functionality**: Execute test queries and verify responses
-- [ ] **Health Monitoring**: Configure uptime monitoring for all endpoints
+- [ ] `CORS_ALLOWED_ORIGINS` includes your real Vercel domain
+- [ ] Supabase Auth → URL Configuration → Site URL points at your Vercel domain (needed for email-confirmation links to redirect correctly)
+- [ ] `GET /api/status` returns `200` from the deployed backend
+- [ ] Sign up, confirm email, sign in, ask a question, confirm citations render
 
 ---
 
-## 🔒 Security & Compliance
+## Troubleshooting
 
-### Authentication & Authorization
-- **🔐 Supabase Integration**: Enterprise-grade user management with JWT tokens
-- **🛡️ Role-Based Access**: Extensible permission system for document access control
-- **🔑 API Security**: Request validation, rate limiting, and CORS policies
+**"Enhanced index not found" / empty results**
+Run `python backend/build_local_index.py --reset` (or `build_drive_index.py` if using real Drive). On a redeploy, check the startup logs — it should say it rehydrated from Supabase automatically; if not, verify `SUPABASE_SERVICE_ROLE_KEY` is set on the host.
 
-### Data Protection
-- **📄 Source Preservation**: Original documents remain in source locations
-- **🗂️ Metadata Only**: Index stores text chunks and references, not full documents
-- **📝 Audit Trails**: Comprehensive logging of queries and responses
-- **🚫 PII Protection**: Sensitive content filtering and secure logging practices
+**"Invalid or expired Supabase token" on every request**
+Confirm `SUPABASE_URL`/`SUPABASE_ANON_KEY` match between frontend and backend, and that the frontend is actually sending an `Authorization: Bearer <token>` header (check Network tab).
 
-### Compliance Features
-- **📊 Query Logging**: Timestamped user interactions with pseudonymous IDs
-- **🔍 Source Attribution**: Complete provenance tracking for all responses
-- **⏱️ Data Retention**: Configurable retention policies for audit requirements
-- **🔒 Secure Transport**: HTTPS enforcement across all service communications
+**403 on `/api/rag/admin/*`**
+That's RBAC working as intended — the signed-in user doesn't have `Owner` or `Admin` in their `app_metadata.role`. Grant it via the Supabase Admin API (see [Security](#security)).
+
+**429 Too Many Requests**
+Rate limiting working as intended. Wait a minute, or adjust the limits in the relevant `@limiter.limit(...)` decorator if they're genuinely too strict for your usage.
+
+**Gemini embedding dimension mismatch after changing `GEMINI_EMBEDDING_DIM`**
+The `fact_embedding.embedding` column is a fixed-width `vector(1536)`. Changing the dimension requires dropping and recreating that column (or the whole table) and rebuilding the index from scratch.
 
 ---
 
-## 📊 Monitoring & Operations
+## License
 
-### Observability Strategy
-
-#### Multi-Level Health Assessment
-- **🟢 System Status**: Application health without external dependencies
-- **🔍 Service Status**: Retrieval and LLM provider availability
-- **📊 Index Status**: Content metadata and performance metrics
-
-#### Comprehensive Trace Information
-```json
-{
-  "trace": {
-    "impl": "EnhancedIndex|IntegratedSearch",
-    "index_path": "enhanced_index.json",
-    "used_fallback": false,
-    "processing_time_ms": 245,
-    "query_tokens": 15,
-    "retrieval_confidence": 0.87,
-    "warnings": []
-  }
-}
-```
-
-### Operational Best Practices
-
-#### Backup Strategy
-- **📁 Enhanced Index**: Daily versioned backups with off-site storage
-- **🗄️ PostgreSQL**: Supabase managed backups with point-in-time recovery
-- **📋 Configuration**: Environment variables and secrets backup
-
-#### Scaling Considerations
-- **🔄 Horizontal Scaling**: Stateless backend design supports load balancing
-- **⚡ Performance**: Enhanced index provides consistent sub-second response times
-- **💰 Cost Optimization**: Intelligent rate limiting and batch processing
-
----
-
-## 🔧 Troubleshooting
-
-### Common Issues and Solutions
-
-#### CORS Configuration Issues
-**Problem**: Frontend cannot access backend API
-**Solution**: 
-```bash
-# Verify CORS_ORIGINS includes exact frontend domains
-CORS_ORIGINS=https://opsvista-frontend.vercel.app,https://preview-branch.vercel.app
-```
-
-#### Enhanced Index Problems
-**Problem**: "Enhanced index not found" or zero results
-**Solution**:
-```bash
-# Check index status
-curl GET "${API_BASE}/rag/chat/index/status"
-
-# Rebuild index
-python backend/gdrive_to_enhanced_index.py
-```
-
-#### Authentication Failures
-**Problem**: Supabase authentication not working
-**Solution**:
-- Verify `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- Check Supabase project RLS policies
-- Validate JWT token expiration settings
-
-#### Embedding Dimension Mismatch
-**Problem**: "Shapes not aligned" during retrieval
-**Solution**:
-- Ensure consistent embedding model across index build and search
-- Rebuild index with correct `EMBEDDING_MODEL` setting
-- Verify OpenAI API key has access to specified model
-
-#### Performance Issues
-**Problem**: Slow response times
-**Solution**:
-- Check enhanced index file size and load times
-- Monitor OpenAI API rate limits and quotas
-- Verify adequate system resources for embedding operations
-
-### Debug Mode
-
-Enable detailed logging by setting `debug: true` in chat requests:
-
-```json
-{
-  "message": "Your query here",
-  "debug": true
-}
-```
-
-This provides comprehensive trace information for troubleshooting.
-
----
-
-## 🤝 Contributing
-
-### Development Guidelines
-
-#### Code Standards
-- **Python**: Follow PEP 8 style guidelines with Black formatting
-- **TypeScript**: ESLint configuration with Prettier formatting
-- **Documentation**: Comprehensive docstrings and inline comments
-
-#### Testing Requirements
-- **Unit Tests**: Minimum 80% code coverage for core functionality
-- **Integration Tests**: End-to-end API testing with mock services
-- **Performance Tests**: Load testing for concurrent user scenarios
-
-#### Pull Request Process
-1. **🌿 Feature Branch**: Create from `main` with descriptive naming
-2. **✅ Testing**: Ensure all tests pass and coverage requirements met
-3. **📚 Documentation**: Update relevant documentation and README sections
-4. **🔍 Code Review**: Minimum two reviewer approvals required
-5. **🚀 Deployment**: Automated CI/CD pipeline handles staging deployment
-
-### Development Environment Setup
-
-```bash
-# Install development dependencies
-pip install -r backend/requirements-dev.txt
-
-# Setup pre-commit hooks
-pre-commit install
-
-# Run tests
-pytest backend/tests/
-
-# Format code
-black backend/
-prettier --write frontend/
-```
-
----
-
-## 📄 License
-
-**Proprietary Software** - © 2025 Precision Textile Industry LTD
-
-This repository contains proprietary materials of Precision Textile Industry LTD (PTIL). All rights reserved. No part of this software, documentation, or associated materials may be reproduced, distributed, or transmitted in any form without prior written permission from PTIL.
-
-### Authorized Personnel Only
-Access to this repository and its contents is restricted to authorized PTIL personnel and approved contractors bound by confidentiality agreements.
-
-### Third-Party Components
-This software incorporates open-source components under their respective licenses. See individual component documentation for specific license terms.
-
----
+**Proprietary Software** — © 2026 Precision Textile Industry LTD. All rights reserved. Access restricted to authorized PTIL personnel and approved contractors under confidentiality agreements.
 
 <div align="center">
 
-**Built with ❤️ for Precision Textile Industry LTD**
-
-*For support or questions, contact the OpsVista Engineering Team*
+**Built for Precision Textile Industry LTD**
 
 </div>

@@ -73,8 +73,11 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     # DATABASE (Supabase)
     # -------------------------------------------------------------------------
-    SUPABASE_URL: str
-    SUPABASE_ANON_KEY: str
+    # Defaulted (not required) so the app can boot in dev/demo mode before a
+    # Supabase project exists. Supabase-backed routes (auth, discovery) will
+    # simply fail at call time with a clear error instead of crashing startup.
+    SUPABASE_URL: str = Field(default="https://placeholder.supabase.co")
+    SUPABASE_ANON_KEY: str = Field(default="")
 
     # Make service key optional so we can fill it from SUPABASE_SERVICE_ROLE_KEY
     SUPABASE_SERVICE_KEY: Optional[str] = None
