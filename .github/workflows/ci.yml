@@ -33,6 +33,15 @@ jobs:
           USE_MOCK_EMBEDDINGS: "true"
         run: pytest -v
 
+      - name: Smoke-import the FastAPI app
+        # pytest never imports app.main (tests target chat.py's helpers
+        # directly), so a missing dependency used only there — e.g. slowapi —
+        # can pass CI and still crash the real server on boot. This mirrors
+        # exactly what `uvicorn app.main:app` does at process start.
+        env:
+          USE_MOCK_EMBEDDINGS: "true"
+        run: python -c "import app.main"
+
   frontend:
     name: Frontend lint & build
     runs-on: ubuntu-latest

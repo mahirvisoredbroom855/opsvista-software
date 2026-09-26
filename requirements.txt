@@ -10,6 +10,7 @@ openai>=1.30
 google-genai>=1.0
 supabase>=2.4
 numpy>=1.26,<3.0
+slowapi>=0.1.9
 
 # If (and only if) you truly use Google *gRPC* clients right now, UNCOMMENT this:
 # grpcio-status>=1.62.2
