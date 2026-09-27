@@ -21,7 +21,10 @@
 -- (e.g. the ivfflat dimension-limit error) before recreating everything.
 DROP FUNCTION IF EXISTS match_chunks(vector, int);
 DROP FUNCTION IF EXISTS match_chunks(text, int);
+DROP FUNCTION IF EXISTS match_queries(vector, int, uuid);
+DROP FUNCTION IF EXISTS match_queries(text, int, uuid);
 DROP TABLE IF EXISTS bridge_query_citation CASCADE;
+DROP TABLE IF EXISTS fact_query_embedding CASCADE;
 DROP TABLE IF EXISTS fact_query CASCADE;
 DROP TABLE IF EXISTS fact_embedding CASCADE;
 DROP TABLE IF EXISTS fact_chunk CASCADE;
@@ -109,6 +112,20 @@ CREATE TABLE IF NOT EXISTS fact_query (
     created_at            TIMESTAMPTZ DEFAULT now()
 );
 
+-- ---------------------------------------------------------------------------
+-- Query embeddings — powers the "similar questions others are asking" UI
+-- feature. Same pattern as fact_embedding/match_chunks (dual-path
+-- retrieval), applied to past *queries* instead of document chunks: every
+-- answered query gets embedded and stored here, so a new question can be
+-- compared against real prior questions via cosine similarity rather than
+-- a fake/static number.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS fact_query_embedding (
+    query_id      UUID PRIMARY KEY REFERENCES fact_query(query_id) ON DELETE CASCADE,
+    embedding     VECTOR(1536) NOT NULL,
+    generated_at  TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS bridge_query_citation (
     query_id         UUID REFERENCES fact_query(query_id) ON DELETE CASCADE,
     document_id      UUID REFERENCES dim_document(document_id),
@@ -164,6 +181,38 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- match_queries(): finds prior questions similar to a new one, via the same
+-- text->vector RPC pattern as match_chunks (see its comment for why TEXT,
+-- not VECTOR, is the parameter type). exclude_query_id lets a caller keep
+-- the current in-flight query out of its own "similar questions" result
+-- once it's been logged.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION match_queries(
+    query_embedding TEXT,
+    match_count INT DEFAULT 5,
+    exclude_query_id UUID DEFAULT NULL
+)
+RETURNS TABLE (
+    query_id    UUID,
+    query_text  TEXT,
+    similarity  FLOAT,
+    created_at  TIMESTAMPTZ
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        fq.query_id,
+        fq.query_text,
+        1 - (fqe.embedding <=> query_embedding::vector) AS similarity,
+        fq.created_at
+    FROM fact_query_embedding fqe
+    JOIN fact_query fq ON fq.query_id = fqe.query_id
+    WHERE exclude_query_id IS NULL OR fqe.query_id != exclude_query_id
+    ORDER BY fqe.embedding <=> query_embedding::vector
+    LIMIT match_count;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- Row Level Security
 --
 -- Reasoning: the knowledge corpus tables (dim_document/fact_chunk/
@@ -178,6 +227,7 @@ ALTER TABLE dim_document ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fact_chunk ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fact_embedding ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fact_query ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fact_query_embedding ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bridge_query_citation ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS authenticated_read_documents ON dim_document;

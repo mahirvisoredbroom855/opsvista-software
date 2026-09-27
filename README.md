@@ -24,6 +24,7 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 ![Python](https://img.shields.io/badge/Python_3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
+![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
 ![Node.js](https://img.shields.io/badge/Node.js_20-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)
 
 ### Frontend Framework & Styling
@@ -77,6 +78,7 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 | **Backend testing** | `pytest`, `pytest-asyncio`, `pytest-mock` — 27 tests (see [Testing](#-testing)) |
 | **Frontend testing** | `mocha` + `tsx` — 18 tests (see [Testing](#-testing)) |
 | **CI/CD** | GitHub Actions — lint/test/build on every push, nightly scheduled reindex |
+| **Dev tooling** | `scripts/check-env.js` — plain Node.js (no TypeScript build step needed for a one-off script), verifies required `.env`/`.env.local` vars before you try to run anything |
 | **Hosting** | Render — **live**; Vercel — **planned, not yet deployed** |
 
 ---
@@ -122,12 +124,13 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 ### 💬 Chat Experience
 
 - Natural-language Q&A grounded in your own documents, streamed live
-- 📎 **Per-answer citations** — file name, department badge, Google Drive link, relevance score
+- 🗂️ **Salient department badges** — shown immediately under every answer (not hidden behind a click), so you know at a glance whether it drew on HR, Finance, Commercial, etc.
+- 📎 **A real "N sources" button** — a genuine clickable disclosure (not a disguised text link) that expands the full citation list: file name, department, Google Drive link, relevance score
+- 🔁 **"Similar questions asked before"** — a real cosine-similarity match against every previously-logged question (`fact_query_embedding` + a `match_queries()` pgvector RPC — same dual-path pattern as document retrieval, applied to query history), shown only when a genuine match clears an 80% similarity floor, never a fabricated number
 - 📊 **Auto-charted Excel citations** — spreadsheet-derived sources render as a real data table *and* a bar chart, with a magnitude filter so a tiny unit price doesn't get crushed next to a six-figure total
 - 🧭 **Retrieval trace panel** — which index answered (primary vs. pgvector fallback), confidence %, source diversity %
 - 👍👎 **Feedback buttons** on every answer
 - 🕐 **"Synced X ago" badge** — know at a glance how fresh the underlying knowledge base is
-- 🗂️ **Department clusters** — see at a glance which departments' documents fed an answer
 
 <br/>
 <img src="screenshots/chat-sources.png" alt="Citations, trace panel, and feedback buttons" width="850" />
@@ -250,6 +253,7 @@ Every response carries a real `trace` object:
 | `fact_chunk` | Text chunks, ordinal position, full metadata (JSONB) |
 | `fact_embedding` | The actual `vector(1536)` embeddings |
 | `fact_query` | Audit log: every question, confidence, latency, tokens, fallback flag, user rating |
+| `fact_query_embedding` | Each question's own `vector(1536)` — powers "similar questions asked before" via `match_queries()` |
 | `bridge_query_citation` | Which chunks were cited for which query, ranked |
 
 **Why 1536 dims, not Gemini's native 3072?** `pgvector`'s `ivfflat`/`hnsw` indexes cap at 2000 dimensions. Gemini supports requesting a smaller output directly via `output_dimensionality=1536`.
@@ -301,7 +305,34 @@ CORS_ALLOWED_ORIGINS=http://localhost:3000
 REINDEX_AUTOMATION_TOKEN=...          # optional — enables the nightly cron trigger (see below)
 ```
 
-Then run `backend/sql/schema.sql` once in your Supabase project's SQL Editor.
+Then run `backend/sql/schema.sql` once in your Supabase project's SQL Editor — on a **fresh** project only, since it starts with `DROP TABLE`. If you already have a live project with real data, run this non-destructive migration instead to pick up the `fact_query_embedding` table + `match_queries()` function (the "similar questions" feature) without touching anything else:
+
+```sql
+CREATE TABLE IF NOT EXISTS fact_query_embedding (
+    query_id      UUID PRIMARY KEY REFERENCES fact_query(query_id) ON DELETE CASCADE,
+    embedding     VECTOR(1536) NOT NULL,
+    generated_at  TIMESTAMPTZ DEFAULT now()
+);
+ALTER TABLE fact_query_embedding ENABLE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE FUNCTION match_queries(
+    query_embedding TEXT,
+    match_count INT DEFAULT 5,
+    exclude_query_id UUID DEFAULT NULL
+)
+RETURNS TABLE (query_id UUID, query_text TEXT, similarity FLOAT, created_at TIMESTAMPTZ)
+LANGUAGE sql STABLE
+AS $$
+    SELECT fq.query_id, fq.query_text,
+           1 - (fqe.embedding <=> query_embedding::vector) AS similarity,
+           fq.created_at
+    FROM fact_query_embedding fqe
+    JOIN fact_query fq ON fq.query_id = fqe.query_id
+    WHERE exclude_query_id IS NULL OR fqe.query_id != exclude_query_id
+    ORDER BY fqe.embedding <=> query_embedding::vector
+    LIMIT match_count;
+$$;
+```
 
 Copy/create `frontend/.env.local`:
 
@@ -310,6 +341,12 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 NEXT_PUBLIC_REQUIRE_AUTH=true
+```
+
+Sanity-check both files before going further:
+
+```bash
+node scripts/check-env.js
 ```
 
 ### 3. Build the index
@@ -399,6 +436,7 @@ opsvista-software/
 │   ├── ci.yml                                 # Lint + pytest + Mocha + build, on every push
 │   └── scheduled-reindex.yml                  # Nightly cron: triggers + polls the reindex endpoint
 │
+├── scripts/check-env.js                       # Plain Node.js — validates .env / .env.local before you run anything
 ├── screenshots/                               # Real UI screenshots (this README)
 ├── pictures/                                  # Architecture diagrams
 └── render.yaml                                # Render Blueprint for one-click backend deploy
@@ -427,7 +465,7 @@ Interactive OpenAPI docs are always available at `/docs` on a running backend.
 
 | Event | Payload | When |
 |---|---|---|
-| `meta` | `chat_id`, `sources`, `trace`, `warnings`, `created` | Immediately after retrieval, before generation |
+| `meta` | `chat_id`, `sources`, `trace`, `warnings`, `similar_queries`, `created` | Immediately after retrieval, before generation |
 | `token` | `content` (a text fragment) | Once per chunk the LLM streams back |
 | `warning` | `message` | If context had to be truncated mid-generation |
 | `error` | `message` | If generation fails after retrieval succeeded |
@@ -455,11 +493,16 @@ Interactive OpenAPI docs are always available at `/docs` on a running backend.
   ],
   "usage": { "prompt_tokens": 696, "completion_tokens": 126, "total_tokens": 822 },
   "trace": { "impl": "enhanced_index", "retrieval_confidence": 0.78, "used_fallback": false },
-  "warnings": []
+  "warnings": [],
+  "similar_queries": [
+    { "query_text": "How many casual leave days do I get?", "similarity": 0.91, "created_at": "2026-09-20T10:12:00Z" }
+  ]
 }
 ```
 
 `warnings[]` is populated when: no documents were found, the fallback path was used, the fallback was attempted but also came up empty, or context was truncated to fit `MAX_CONTEXT_TOKENS` (default `6000`).
+
+`similar_queries[]` only ever contains prior questions whose cosine similarity against this one clears `SIMILAR_QUERY_THRESHOLD` (default `0.80`) — an empty array means genuinely no similar question has been asked yet, not a broken feature.
 
 <p align="center">
   <img src="pictures/Response%20Assembly%20(What%20the%20API%20returns).png" alt="Response Assembly" width="80%">

@@ -331,6 +331,85 @@ def log_query(
     return True
 
 
+# Below this cosine-similarity score, two questions are treated as
+# unrelated rather than "similar" — without a floor, match_queries() always
+# returns its top-N rows even when the closest one is barely related,
+# which would make the "similar questions" UI claim a relationship that
+# isn't really there.
+SIMILAR_QUERY_THRESHOLD = float(os.getenv("SIMILAR_QUERY_THRESHOLD", "0.80"))
+
+
+def upsert_query_embedding(query_id: str, query_text: str) -> bool:
+    """
+    Embeds and stores a query's own text vector, so *future* queries can be
+    compared against it via find_similar_queries(). Called after a query has
+    already been logged via log_query() — best-effort, same as the rest of
+    this module's audit-trail writes.
+    """
+    client = _get_service_client()
+    if client is None:
+        return False
+
+    try:
+        vector = embed_texts([query_text])[0]
+        client.table("fact_query_embedding").upsert(
+            {"query_id": query_id, "embedding": vector},
+            on_conflict="query_id",
+        ).execute()
+        return True
+    except Exception as e:
+        logger.warning(f"[pgvector] Failed to store query embedding for {query_id}: {e}")
+        return False
+
+
+def find_similar_queries(
+    query_text: str, top_k: int = 5, exclude_query_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Finds prior questions genuinely similar to this one — a real "people are
+    also asking" signal backed by cosine similarity over actually-logged
+    queries, not a placeholder number. Returns [] whenever there's nothing
+    to compare against yet (empty history, Supabase not configured, or no
+    match clears SIMILAR_QUERY_THRESHOLD) rather than a misleading result.
+    """
+    client = _get_service_client()
+    if client is None:
+        return []
+
+    try:
+        vector = embed_texts([query_text])[0]
+    except Exception as e:
+        logger.warning(f"[pgvector] Similar-query embedding failed: {e}")
+        return []
+
+    try:
+        resp = client.rpc(
+            "match_queries",
+            {
+                "query_embedding": json.dumps(vector),
+                "match_count": top_k,
+                "exclude_query_id": exclude_query_id,
+            },
+        ).execute()
+    except Exception as e:
+        logger.warning(f"[pgvector] match_queries RPC failed: {e}")
+        return []
+
+    results = []
+    for row in resp.data or []:
+        similarity = float(row.get("similarity") or 0.0)
+        if similarity < SIMILAR_QUERY_THRESHOLD:
+            continue
+        results.append(
+            {
+                "query_text": row.get("query_text", ""),
+                "similarity": similarity,
+                "created_at": row.get("created_at"),
+            }
+        )
+    return results
+
+
 def set_feedback(query_id: str, rating: str) -> bool:
     """
     Records a thumbs up/down on a previously-answered query by updating its

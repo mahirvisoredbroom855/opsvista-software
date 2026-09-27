@@ -3,6 +3,8 @@
 import type { Session } from "@supabase/supabase-js";
 import {
   Check,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Copy,
   Database,
@@ -10,6 +12,7 @@ import {
   GitBranch,
   LogOut,
   RefreshCw,
+  Repeat2,
   Send,
   Sparkles,
   ThumbsDown,
@@ -68,6 +71,12 @@ type IndexStatusResponse = {
   file_info?: { modified_epoch?: number };
 };
 
+type SimilarQuery = {
+  query_text: string;
+  similarity: number;
+  created_at?: string;
+};
+
 type ChatMessage = {
   id: string;
   chatId?: string;
@@ -75,6 +84,7 @@ type ChatMessage = {
   content: string;
   sources?: Source[];
   trace?: Trace;
+  similarQueries?: SimilarQuery[];
   model?: string;
   pending?: boolean;
   rating?: "up" | "down";
@@ -252,7 +262,12 @@ function SourceCard({ source }: { source: Source }) {
   );
 }
 
-/** Small "N docs from Department" cluster summary shown above the source list. */
+/**
+ * Always-visible department badges — previously buried inside the
+ * collapsed sources <details>, meaning you had to click to expand before
+ * finding out an answer was even HR- or Finance-related. Department is
+ * exactly the kind of thing that should be salient at a glance.
+ */
 function SourceClusters({ sources }: { sources: Source[] }) {
   const counts = new Map<string, number>();
   for (const s of sources) {
@@ -266,6 +281,74 @@ function SourceClusters({ sources }: { sources: Source[] }) {
           {dept} · {count}
         </span>
       ))}
+    </div>
+  );
+}
+
+/**
+ * A real clickable button (not a native <summary> disguised as a link) that
+ * discloses the full source list + charts on demand, while the department
+ * badges above it stay visible either way.
+ */
+function SourcesToggle({
+  sources,
+  model,
+}: {
+  sources: Source[];
+  model?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="sources-toggle">
+      <button
+        type="button"
+        className="sources-toggle__btn"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-1.5">
+          {sources.length} source{sources.length > 1 ? "s" : ""} ·{" "}
+          {model || "model"}
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </span>
+      </button>
+      {open && (
+        <div className="sources__list">
+          {sources.map((s) => (
+            <SourceCard
+              key={`${s.metadata.drive_file_id ?? s.metadata.file_name}-${s.score}`}
+              source={s}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "People are also asking" — a real cosine-similarity match against
+ * previously-logged queries (see find_similar_queries() in
+ * pgvector_store.py), not a placeholder number. Empty means genuinely no
+ * similar prior question cleared the similarity threshold yet, so this
+ * renders nothing rather than a fabricated "0 similar" line.
+ */
+function SimilarQuestions({ items }: { items: SimilarQuery[] }) {
+  if (!items || items.length === 0) return null;
+  const top = items[0];
+  const pct = Math.round(top.similarity * 100);
+  return (
+    <div
+      className="similar-questions"
+      title="Based on cosine similarity against previously logged questions"
+    >
+      <Repeat2 size={12} />
+      <span>
+        {items.length} similar question{items.length > 1 ? "s" : ""} asked
+        before
+      </span>
+      <span className="similar-questions__pct">{pct}% match</span>
+      <span className="similar-questions__example">“{top.query_text}”</span>
     </div>
   );
 }
@@ -542,6 +625,7 @@ export default function Page() {
               chatId: data.chat_id,
               sources: data.sources,
               trace: data.trace,
+              similarQueries: data.similar_queries,
             }));
           } else if (eventName === "token") {
             content += data.content;
@@ -700,22 +784,18 @@ export default function Page() {
               {m.role === "assistant" &&
                 !m.pending &&
                 m.sources &&
+                m.sources.length > 0 && <SourceClusters sources={m.sources} />}
+              {m.role === "assistant" &&
+                !m.pending &&
+                m.similarQueries &&
+                m.similarQueries.length > 0 && (
+                  <SimilarQuestions items={m.similarQueries} />
+                )}
+              {m.role === "assistant" &&
+                !m.pending &&
+                m.sources &&
                 m.sources.length > 0 && (
-                  <details className="sources">
-                    <summary className="sources__summary">
-                      {m.sources.length} source{m.sources.length > 1 ? "s" : ""}{" "}
-                      · {m.model || "model"}
-                    </summary>
-                    <SourceClusters sources={m.sources} />
-                    <div className="sources__list">
-                      {m.sources.map((s) => (
-                        <SourceCard
-                          key={`${s.metadata.drive_file_id ?? s.metadata.file_name}-${s.score}`}
-                          source={s}
-                        />
-                      ))}
-                    </div>
-                  </details>
+                  <SourcesToggle sources={m.sources} model={m.model} />
                 )}
             </div>
           ))}

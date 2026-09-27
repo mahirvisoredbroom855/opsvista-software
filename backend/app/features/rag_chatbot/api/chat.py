@@ -48,6 +48,7 @@ class ChatResponse(BaseModel):
     usage: Dict[str, Any]
     trace: Dict[str, Any]
     warnings: List[str] = []
+    similar_queries: List[Dict[str, Any]] = []
 
 
 # =========================
@@ -403,6 +404,17 @@ async def chat_complete(
         conf_str = f"{conf:.2f}" if conf is not None else "unknown"
         warnings.append(f"Retrieval confidence was low ({conf_str}) and the pgvector fallback found no additional results.")
 
+    # "Similar questions others are asking" — a real cosine-similarity
+    # lookup against previously-logged queries, not a placeholder number.
+    # Best-effort: an empty list here just means no data yet / not configured.
+    similar_queries: List[Dict[str, Any]] = []
+    try:
+        from ..vector.pgvector_store import find_similar_queries
+
+        similar_queries = await asyncio.to_thread(find_similar_queries, body.message, 5)
+    except Exception as e:
+        print(f"[WARN] Similar-queries lookup failed: {e}")
+
     # Try to use your LLM client if available
     content = ""
     model = "none (retrieval-only fallback)"
@@ -479,12 +491,13 @@ async def chat_complete(
         "warnings": warnings,
         "usage": usage,
         "trace": trace,
+        "similar_queries": similar_queries,
     }
 
     # Best-effort audit logging (fact_query + bridge_query_citation) — never
     # blocks or fails the chat response if Supabase isn't configured/reachable.
     try:
-        from ..vector.pgvector_store import log_query
+        from ..vector.pgvector_store import log_query, upsert_query_embedding
 
         await asyncio.to_thread(
             log_query,
@@ -500,6 +513,9 @@ async def chat_complete(
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
         )
+        # Stored after logging (not before) so this query only becomes
+        # discoverable to *future* similar-queries lookups, never its own.
+        await asyncio.to_thread(upsert_query_embedding, chat_id, body.message)
     except Exception as e:
         print(f"[WARN] Audit logging failed: {e}")
 
@@ -554,6 +570,14 @@ async def chat_stream(
         chat_id = str(uuid.uuid4())
         sources = _render_sources(docs, limit=body.top_k)
 
+        similar_queries: List[Dict[str, Any]] = []
+        try:
+            from ..vector.pgvector_store import find_similar_queries
+
+            similar_queries = await asyncio.to_thread(find_similar_queries, body.message, 5)
+        except Exception as e:
+            print(f"[WARN] Similar-queries lookup failed: {e}")
+
         yield _sse_event(
             "meta",
             {
@@ -561,6 +585,7 @@ async def chat_stream(
                 "sources": sources,
                 "trace": trace,
                 "warnings": warnings,
+                "similar_queries": similar_queries,
                 "created": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -621,7 +646,7 @@ async def chat_stream(
         )
 
         try:
-            from ..vector.pgvector_store import log_query
+            from ..vector.pgvector_store import log_query, upsert_query_embedding
 
             await asyncio.to_thread(
                 log_query,
@@ -637,6 +662,7 @@ async def chat_stream(
                 completion_tokens=usage.get("completion_tokens"),
                 total_tokens=usage.get("total_tokens"),
             )
+            await asyncio.to_thread(upsert_query_embedding, chat_id, body.message)
         except Exception as e:
             print(f"[WARN] Audit logging failed: {e}")
 
