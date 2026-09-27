@@ -18,6 +18,8 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 ---
 
+## 🛠️ Technology Stack
+
 ### Languages & Core
 
 ![Python](https://img.shields.io/badge/Python_3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
@@ -59,8 +61,24 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 ### Hosting
 
-![Render](https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)
-![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)
+![Render](https://img.shields.io/badge/Render_(live)-46E3B7?style=for-the-badge&logo=render&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel_(planned)-000000?style=for-the-badge&logo=vercel&logoColor=white)
+
+> **Honesty check:** the backend is genuinely deployed and live on Render (verified: `GET /api/status` → `200`). The frontend has **not** been deployed to Vercel yet — it only runs locally so far (`npm run dev`). Vercel is the intended target (see [Deployment](#-deployment)), not a claim that it's already live.
+
+<br/>
+
+| Category | What's actually used |
+|---|---|
+| **Backend runtime** | Python 3.13, FastAPI, Uvicorn, Pydantic v2, `slowapi` (rate limiting) |
+| **Frontend** | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS v4, `lucide-react`, `recharts`, `react-markdown` |
+| **Database, Auth & Vector Store** | Supabase — managed Postgres, Auth (JWT), Row Level Security, `pgvector` extension |
+| **LLM & Embeddings** | Google Gemini (`gemini-flash-lite-latest` generation, `gemini-embedding-001` embeddings) — primary; OpenAI supported as an alternate provider, not actively used |
+| **Document ingestion** | Google Drive API v3, `pypdf`, `python-docx`, `pandas` + `openpyxl` |
+| **Backend testing** | `pytest`, `pytest-asyncio`, `pytest-mock` — 27 tests (see [Testing](#-testing)) |
+| **Frontend testing** | `mocha` + `tsx` — 18 tests (see [Testing](#-testing)) |
+| **CI/CD** | GitHub Actions — lint/test/build on every push, nightly scheduled reindex |
+| **Hosting** | Render — **live**; Vercel — **planned, not yet deployed** |
 
 ---
 
@@ -145,66 +163,6 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 - Ephemeral-disk safety — if the local index file goes missing on a redeploy (Render free tier wipes disk), it auto-rehydrates from Supabase on startup
 
 ---
-
-## 🛠️ Technology Stack
-
-### Languages & Core
-
-![Python](https://img.shields.io/badge/Python_3.13-3776AB?style=flat-square&logo=python&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript_5-3178C6?style=flat-square&logo=typescript&logoColor=white)
-![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
-![Node.js](https://img.shields.io/badge/Node.js_20-339933?style=flat-square&logo=nodedotjs&logoColor=white)
-
-### Frontend Framework & Styling
-
-![Next.js](https://img.shields.io/badge/Next.js_15-000000?style=flat-square&logo=nextdotjs&logoColor=white)
-![React](https://img.shields.io/badge/React_19-61DAFB?style=flat-square&logo=react&logoColor=black)
-![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS_v4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
-![Lucide](https://img.shields.io/badge/Lucide_Icons-F15A24?style=flat-square&logo=lucide&logoColor=white)
-![Recharts](https://img.shields.io/badge/Recharts-8884d8?style=flat-square)
-
-### Backend & AI
-
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
-![Uvicorn](https://img.shields.io/badge/Uvicorn-2C3E50?style=flat-square&logo=gunicorn&logoColor=white)
-![Pydantic](https://img.shields.io/badge/Pydantic_v2-E92063?style=flat-square&logo=pydantic&logoColor=white)
-![Google Gemini](https://img.shields.io/badge/Gemini_API-8E75B2?style=flat-square&logo=googlegemini&logoColor=white)
-![OpenAI](https://img.shields.io/badge/OpenAI_(optional)-412991?style=flat-square&logo=openai&logoColor=white)
-
-### Data, Auth & Vector Store
-
-![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=flat-square&logo=supabase&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)
-![pgvector](https://img.shields.io/badge/pgvector-4169E1?style=flat-square&logo=postgresql&logoColor=white)
-![Google Drive](https://img.shields.io/badge/Google_Drive_API-4285F4?style=flat-square&logo=googledrive&logoColor=white)
-
-### Dev Tools & Testing
-
-![Git](https://img.shields.io/badge/Git-F05032?style=flat-square&logo=git&logoColor=white)
-![npm](https://img.shields.io/badge/npm-CB3837?style=flat-square&logo=npm&logoColor=white)
-![Pytest](https://img.shields.io/badge/Pytest-0A9EDC?style=flat-square&logo=pytest&logoColor=white)
-![Mocha](https://img.shields.io/badge/Mocha-8D6748?style=flat-square&logo=mocha&logoColor=white)
-![Biome](https://img.shields.io/badge/Biome-60A5FA?style=flat-square&logo=biome&logoColor=white)
-![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white)
-
-### Hosting
-
-![Render](https://img.shields.io/badge/Render-46E3B7?style=flat-square&logo=render&logoColor=white)
-![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
-
-<br/>
-
-| Category | What's actually used |
-|---|---|
-| **Backend runtime** | Python 3.13, FastAPI, Uvicorn, Pydantic v2, `slowapi` (rate limiting) |
-| **Frontend** | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS v4, `lucide-react`, `recharts`, `react-markdown` |
-| **Database, Auth & Vector Store** | Supabase — managed Postgres, Auth (JWT), Row Level Security, `pgvector` extension |
-| **LLM & Embeddings** | Google Gemini (`gemini-flash-lite-latest` generation, `gemini-embedding-001` embeddings) — primary; OpenAI supported as an alternate provider |
-| **Document ingestion** | Google Drive API v3, `pypdf`, `python-docx`, `pandas` + `openpyxl` |
-| **Backend testing** | `pytest`, `pytest-asyncio`, `pytest-mock` — 27 tests |
-| **Frontend testing** | `mocha` + `tsx` — 18 tests on extracted pure utilities |
-| **CI/CD** | GitHub Actions — lint/test/build on every push, nightly scheduled reindex |
-| **Hosting** | Render (backend), Vercel (frontend) |
 
 ---
 
@@ -555,6 +513,24 @@ Three ways to look at it:
 ---
 
 ## 🧪 Testing
+
+| Suite | Framework | Tests | What it needs |
+|---|---|---|---|
+| Backend | `pytest` + `pytest-asyncio` + `pytest-mock` | 27 | Nothing external — mock embeddings, no network calls, no API cost |
+| Backend (boot check) | plain `python -c "import app.main"` | 1 | Catches missing deps `pytest` alone wouldn't (see below) |
+| Frontend | `mocha` + `tsx` | 18 | Nothing external — pure functions only, no DOM/browser needed |
+| Frontend (lint) | `biome check` | — | Nothing external |
+| Frontend (build) | `next build` | — | Type-checks the whole app |
+
+Run everything locally exactly as CI does:
+
+```bash
+# Backend
+cd backend && pip install -r requirements-test.txt && pytest -v
+
+# Frontend
+cd frontend && npm run lint && npm run test && npm run build
+```
 
 ### Backend — pytest (27 tests)
 
