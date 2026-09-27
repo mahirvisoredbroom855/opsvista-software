@@ -10,6 +10,7 @@ import {
   GitBranch,
   LineChart as LineChartIcon,
   Loader2,
+  LogOut,
   type LucideIcon,
   RefreshCw,
   Sparkles,
@@ -279,6 +280,11 @@ export default function DashboardPage() {
     [metrics],
   );
 
+  async function signOut() {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
+
   if (REQUIRE_AUTH && !authChecked) {
     return (
       <div className="card">
@@ -329,6 +335,11 @@ export default function DashboardPage() {
               ))}
             </div>
             <ReindexButton session={session} />
+            {session && (
+              <button type="button" className="link-btn" onClick={signOut}>
+                <LogOut size={12} /> Sign out
+              </button>
+            )}
           </div>
         </div>
 
