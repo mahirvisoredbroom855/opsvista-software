@@ -107,6 +107,14 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 **OpsVista** replaces "dig through Google Drive folders yourself" with a chat assistant that actually knows the company's documents — finance records, HR policy, commercial orders, maintenance logs, admin procedures — and answers in plain English with **citations back to the real source file** so every answer is verifiable, not just plausible-sounding.
 
+### The knowledge base needs a "who/what/how" document, not just department records
+
+Six department folders full of ledgers, policies, and logs answer *operational* questions fine — but none of them say who owns the company, what it actually manufactures, or how departments relate to each other. Ask "who owns PTIL?" against department records alone and the assistant has nothing to point to.
+
+[`Monir Ahmed (Executive)/PTIL_Company_Overview.md`](<backend/seed_docs/Monir Ahmed (Executive)/PTIL_Company_Overview.md>) fixes that — one reference document covering ownership, business lines, org structure, and department heads, written explicitly to be the answer for identity/background questions rather than something the model has to infer from scattered mentions. It's chunked, embedded, and indexed exactly like every other document — no special-cased prompt, just a document that happens to answer a different kind of question.
+
+> **Deployment note:** this document is currently seeded into the local index and dual-written to Supabase, but it does **not** exist as a real file in Google Drive yet. A full Drive reindex (the nightly cron, or the dashboard's "Reindex now") rebuilds strictly from what's actually in Drive — so until this same file is uploaded to a real Drive folder named `Monir Ahmed (Executive)` (shared with the service account, matching the folder-name pattern in `FOLDER_DEPARTMENT_MAP`), the next full reindex will drop it. Do that once and it behaves exactly like every other department's documents from then on.
+
 ### What makes it real (not a demo)
 
 - 🔀 **Genuine dual-path retrieval** — an in-memory vector index (primary) with a Postgres/pgvector fallback that activates on a real confidence + diversity quality gate, not just "zero results"
@@ -382,8 +390,8 @@ Visit `http://localhost:3000`, sign up (or sign in), and start asking questions.
 
 1. **Google Cloud Console** → new project → enable the **Google Drive API**.
 2. **APIs & Services → Credentials** → Create Credentials → **Service Account** → create a key (JSON) → save as `backend/credentials/google_credentials.json` (already gitignored).
-3. Create one parent Drive folder containing your department subfolders, and **share only that parent folder** with the service account's email — permissions cascade automatically.
-4. Upload documents. Supported: Google Docs, `.pdf`, `.docx`, `.xlsx`, `.txt`, `.md`.
+3. Create one parent Drive folder containing your department subfolders, and **share only that parent folder** with the service account's email — permissions cascade automatically. Subfolder names must match (as a substring) an entry in `FOLDER_DEPARTMENT_MAP` (`backend/app/features/rag_chatbot/ingestion_common.py`) — currently `Riaz Uddin Sarker`, `Md. Mizanur Rahman (PTIL)`, `Khorshed Alam Babu`, `Md. Mozammel Haque`, `Zahedul Islam Nizam`, `Md. Alamin`, and `Monir Ahmed`, mapped to Admin/Finance/Maintenance/HR/Accounting/Commercial/Executive respectively.
+4. Upload documents. Supported: Google Docs, `.pdf`, `.docx`, `.xlsx`, `.txt`, `.md`. Make sure a `Monir Ahmed (Executive)` folder exists containing [`PTIL_Company_Overview.md`](<backend/seed_docs/Monir Ahmed (Executive)/PTIL_Company_Overview.md>) — otherwise a full reindex won't have a company-identity document to fall back on (see the callout in [Overview](#-overview)).
 5. Run `python build_drive_index.py --reset` (or trigger `POST /api/rag/admin/reindex` from an Owner/Admin session).
 
 ---
@@ -418,6 +426,7 @@ opsvista-software/
 │   ├── sql/schema.sql                        # Full Supabase schema, RLS, match_chunks() RPC
 │   ├── tests/                                # 27 pytest tests, mock embeddings, no network calls
 │   └── seed_docs/                            # Realistic dummy PTIL documents (Excel/Word/PDF/MD)
+│       └── Monir Ahmed (Executive)/          # Company Overview — who/what/how, not operational records
 │
 ├── frontend/
 │   ├── src/

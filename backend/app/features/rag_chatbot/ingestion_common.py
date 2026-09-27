@@ -23,6 +23,7 @@ FOLDER_DEPARTMENT_MAP = {
     "Md. Mozammel Haque": "HR",
     "Zahedul Islam Nizam": "Accounting",
     "Md. Alamin": "Commercial",
+    "Monir Ahmed": "Executive",
 }
 
 
