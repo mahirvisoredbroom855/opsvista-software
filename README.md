@@ -234,6 +234,18 @@ The diagram below is the literal implementation of that description:
 
 **What this shows:** the four layers described above — client, API, dual-path retrieval, and the two external stores (Supabase, Google Drive).
 
+> **In plain English — what this picture is actually saying**
+> - Top right, **"Frontend Layer"**: this is the webpage a person actually looks at and clicks (`frontend/src/app/page.tsx`). The moment it loads, it fires off a handful of small background requests — "am I online," "is the AI provider working," "when was the search index last refreshed" — and separately, whenever someone hits Send, one big request to ask a question.
+> - Middle, **"FastAPI Application"**: this is the Python web server itself. `main.py` is the front door; a few small routes handle simple status checks; and the box labelled **"Chat Router"** (`chat.py`) is where every real question actually gets processed — everything below it is what happens *inside* answering one question.
+> - Below the Chat Router, two side-by-side boxes it hands work off to:
+>   - **"Retrieval Layer"** (green, right) — the part whose job is "go find the right document snippets." `retrieve_with_trace()` is the traffic cop: it tries the fast, built-in search first (a plain JSON file, already loaded in the server's memory, searched by comparing *meaning*, not just keywords). Only if that comes back weak or empty does it try the second, slower search shown as the "fallback" branch.
+>   - **"Generation Layer"** (purple, left) — once documents are found, `_build_prompt()` glues the user's question and those documents into one big block of instructions, and hands it to `LLMClient` (a wrapper class that knows how to talk to an AI model) to actually write the answer.
+> - Bottom, **"External Services"**: the real outside systems this server talks to over the network — an AI provider (for writing answers), **Supabase** (a hosted database storing both user logins and the document search data), and **Google Drive** (where the original company files — PDFs, Word docs, spreadsheets — actually live before anything is indexed).
+> - **"Index Artifacts" → `enhanced_index.json`**: one single file, sitting on the server's own hard disk, holding every document chunk and its numeric "fingerprint" (embedding) — the file the fast built-in search actually reads.
+> - Bottom right, **"Supabase Auth Client"**: the one piece of code that runs in the browser itself (not on the server) and talks to Supabase directly, just to handle logging a user in and getting them an access token.
+>
+> ⚠️ **Naming note:** the diagram shows the fallback search going through a file called `search_integration.py`. In the current codebase that role is played by a newer, differently-named file, `pgvector_store.py` — same job, just rewritten since this diagram was drawn (see the note under "Retrieval decision flow" below for the full story).
+
 ### Retrieval decision flow
 
 Zooming into the single most important decision the backend makes on every request: which of the two retrieval paths gets to answer.
@@ -253,6 +265,17 @@ The primary index searches first; pgvector only gets a turn if the primary path 
 }
 ```
 
+> **In plain English — following the arrows top to bottom**
+> 1. **"User Query (message)"** — the plain-English question the person typed arrives at the backend.
+> 2. **`retrieve_with_trace()`** — one function in `chat.py` that owns the entire decision made in this diagram.
+> 3. The green diamond, **"Enhanced Index Has Hits?"** — the fork in the road: did the fast, built-in search find anything good?
+>    - **Yes** → `EN.search(query, top_k)` — "EN" is short for "Enhanced index." It turns the question into a list of numbers (an embedding) and compares it against every stored chunk's own numbers using **cosine similarity** (the closer two pieces of text mean the same thing, the higher this score). `top_k` just means "give me back this many of the best matches" (4, by default).
+>    - **No** → the diagram's `_integrated_retrieve()` / `IntegratedSearchManager` boxes. ⚠️ **This exact pairing of names is from an earlier version of the code** — today this branch is `_pgvector_retrieve()` calling `pgvector_search()` in `pgvector_store.py`, which runs the equivalent search against a copy of the same data stored in Supabase's Postgres database instead of in memory. (`pgvector_store.py`'s own header comment says outright that it "replaces the previously-dormant `integrated_search_system.py` / `search_integration.py` scaffolding, which never actually implemented a vector backend.")
+> 4. Both branches meet at **`_norm_one()` Normalize** — no matter which of the two searches actually answered, this step reshapes the result into one consistent format (`{text, score, metadata}`), so nothing downstream has to know or care which search engine found it.
+> 5. **`_build_prompt(message, docs)`** — takes the original question plus the found document snippets and assembles the actual block of text (with instructions on tone, length, and formatting) sent to the AI.
+> 6. **`LLMClient.complete()`** — the real network call out to the AI model that reads that prompt and writes an answer.
+> 7. **`ChatResponse {content, sources, trace}`** — the finished package sent back to the browser: the written answer, which documents it was based on (these become the citation cards under the answer), and a `trace` object recording exactly what happened — this is literally what the chat UI's collapsible "Trace Panel" displays.
+
 ### Chat request sequence
 
 The full round trip for a single question — from the moment the client sends it to the moment the answer, its citations, and its audit-log row are all in place.
@@ -261,6 +284,28 @@ The full round trip for a single question — from the moment the client sends i
   <img src="pictures/Chat%20Request%20Sequence%20(Alt%20paths%20shown).png" alt="Chat Request Sequence" width="90%">
 </p>
 
+> **In plain English — this is a "sequence diagram."** Each vertical line is one participant in the story; time moves top to bottom; every arrow is one message passed between them. The six participants (left to right): the **Client** (the person's web browser), **FastAPI (/chat/stream)** (the backend's streaming chat endpoint, in `chat.py`), the **Enhanced Index** (the fast, built-in, in-memory search), **pgvector** (the backup search, living inside the Supabase Postgres database), **Gemini** (the AI model that actually writes the answer), and **Supabase audit tables** (a separate set of database tables that just keep a permanent log of every question ever asked, for the dashboard).
+>
+> 1. **Client → FastAPI:** `POST /api/rag/chat/stream {message, top_k}` — the browser sends the typed question to the backend, plus `top_k` (how many source documents to retrieve — 4 by default).
+> 2. **FastAPI → Enhanced Index:** `search(query, top_k)` — the backend immediately asks its fast, in-memory search for the best-matching chunks of text.
+> 3. **Enhanced Index → FastAPI:** `docs + confidence` — it returns whatever chunks it found, plus a confidence number: how sure it is the very best match is actually relevant.
+> 4. **The "alt" box** — "alt" is diagram shorthand for "alternative": exactly one of the two paths below happens, never both, decided by the confidence number from step 3:
+>    - **[confidence ≥ 0.5]** — *"use primary docs as-is."* The search was confident enough, so the backend just goes with what it already has. Skip straight to step 7.
+>    - **[confidence < 0.5, or zero results]** — the backend doesn't trust this answer (or found nothing at all), so it tries a second, independent search:
+>      - **FastAPI → pgvector:** `match_chunks(embedding, top_k)` — calls a function that lives directly inside the Postgres database (not Python code) which runs the same kind of similarity search against a second, independently-stored copy of the document data.
+>      - **pgvector → FastAPI:** `fallback docs` — the backup search's results come back and *replace* the original weak ones entirely — the two are never merged.
+> 5. **FastAPI → Supabase (audit tables):** `find_similar_queries(message) [best-effort]` — completely separately, the backend also asks the database "has anyone asked something similar to this before?" **"Best-effort"** means: if this call fails for any reason, the rest of the request keeps going regardless — it's a nice-to-have, not something that can ever break the answer.
+> 6. **Supabase → FastAPI:** `similar_queries[] (only if similarity ≥ 0.80, else [])` — the database hands back a short list of genuinely similar past questions (at least 80% similar by meaning), or nothing if none came close.
+> 7. **FastAPI → Client:** `SSE meta {chat_id, sources, trace, warnings, similar_queries}` — before the AI has written a single word, the backend already sends the browser its first message: a unique ID for this exchange, which documents it's about to answer from, the trace info, any warnings, and those similar past questions. **SSE** ("Server-Sent Events") is just a way for the server to keep pushing small messages to the browser one at a time over a single open connection, instead of the browser having to ask over and over.
+> 8. **FastAPI → Gemini:** `stream_with_messages(prompt + context)` — only now does the backend hand the assembled prompt (question + retrieved document text) to the actual AI model and ask it to start writing.
+> 9. **The "loop" box, "each streamed chunk"** — the AI doesn't send its whole answer at once, it sends it piece by piece. A **"delta"** is simply "the next small new piece of text."
+>    - **Gemini → FastAPI:** `text delta` — one small piece of the answer arrives.
+>    - **FastAPI → Client:** `SSE token {content}` — the backend immediately forwards that exact piece to the browser. This is the entire mechanism behind the answer appearing to "type itself out" live — nothing is buffered and dumped all at once.
+> 10. **The "opt" box, "generation fails"** — "opt" means "optional, only if this happens": **FastAPI → Client:** `SSE error {message}` — if something breaks while the AI is writing, the backend sends one more message explaining what went wrong, so the browser can show a clear error instead of just freezing.
+> 11. **FastAPI → Client:** `SSE done {model, usage, processing_time_ms}` — once the AI has finished, the backend sends a final wrap-up: which AI model actually answered, roughly how much text was processed (`usage`, measured in "tokens" — word-pieces, not whole words), and how long the entire request took.
+> 12. **FastAPI → Supabase (audit tables):** `log_query() → fact_query + bridge_query_citation` — *after* the browser already has its complete answer, the backend quietly writes a permanent record: one row remembering the question, its timing, and which search path was used, plus one extra row per document cited, so the dashboard can later show "most-cited documents."
+> 13. **FastAPI → Supabase (audit tables):** `upsert_query_embedding(chat_id, message) → fact_query_embedding` — finally, the backend saves a numeric fingerprint of the question itself, so the *next* time someone asks something similar, steps 5–6 above will be able to find and surface this one.
+
 ### Data model
 
 What actually gets stored, and how it connects — one row per source document, chunked into embeddings, with every question and its citations logged for the dashboard.
@@ -268,6 +313,15 @@ What actually gets stored, and how it connects — one row per source document, 
 <p align="center">
   <img src="pictures/Data%20Shape%20(ER)%20for%20Enhanced%20Index%20+%20Metadata.png" alt="Data Shape" width="68%">
 </p>
+
+> **In plain English — this is an "ER diagram"** (Entity-Relationship diagram): a standard way to draw a database's tables and how their rows point at each other, with no code shown at all.
+> - **DIM_DOCUMENT** (top) — one row per source file: a specific PDF, Word document, or spreadsheet. `document_id` is its unique ID (marked **PK**, "Primary Key" — every row gets a different one, guaranteed).
+> - The line labelled **"contains"**, with the little forked "crow's foot" symbol at the FACT_CHUNK end, is ER-diagram shorthand for *"one document contains many chunks."*
+> - **FACT_CHUNK** — one row per small piece ("chunk") of a document, roughly 900 characters each, because search works far better on focused paragraphs than on one giant wall of text. `document_id` here is marked **FK**, "Foreign Key" — meaning "this column's value points back to a row in another table" (here, back to the document this chunk came from).
+> - **FACT_EMBEDDING** — one row per chunk's numeric "fingerprint." `embedding` is the actual list of 1536 numbers used for the similarity search described above.
+> - **FACT_QUERY** (top right) — one row per question ever asked in the chat, ever. Holds the question text, whether the backup search had to kick in, how confident retrieval was, and the person's thumbs up/down rating if given.
+> - **FACT_QUERY_EMBEDDING** — the same kind of numeric fingerprint, but of the *question* itself rather than a document — purely what powers "similar questions asked before."
+> - **BRIDGE_QUERY_CITATION** (bottom middle) — a **"bridge table"**: a table whose only job is connecting two other tables together, since one question can cite many chunks and one chunk can be cited by many questions over time. Each row means "this specific question used this specific chunk as a source," with a relevance score and a rank — exactly what lets the dashboard answer "which documents get cited most often."
 
 **[`backend/sql/schema.sql`](backend/sql/schema.sql) is the authoritative, executable source** — the table below summarizes it in one place:
 
@@ -532,6 +586,12 @@ Interactive OpenAPI docs are always available at `/docs` on a running backend.
   <img src="pictures/Response%20Assembly%20(What%20the%20API%20returns).png" alt="Response Assembly" width="80%">
 </p>
 
+> **In plain English — four separate pieces get glued into the one answer object the browser finally receives**
+> - **"Built Prompt" → "LLM Result"** — the assembled prompt (question + retrieved documents + instructions) goes to the AI, and it writes back the actual answer text.
+> - **"Retrieved docs[]" → "Format Sources"** — the raw document chunks that were found get reshaped into the friendlier format the citation cards actually display: a readable label, which file it came from, and whether that file lives in Google Drive or a local test folder.
+> - **"Trace Information"** — packaged on its own: which search path answered, the file path of the index used, whether the fallback fired, and any warnings — the same `trace` object described in "Retrieval decision flow" above.
+> - All three combine into one final object: **`ChatResponse {content, sources, usage, trace}`**. This is, quite literally, the exact JSON the frontend receives and turns into what's on screen: `content` becomes the markdown answer text, `sources` becomes the citation cards, `usage` becomes the small token-count footnote, and `trace` becomes the collapsible "how was this found" panel.
+
 ---
 
 ## 🔄 Scheduled Reindexing
@@ -562,6 +622,11 @@ Three ways to look at it:
 <p align="center">
   <img src="pictures/Health%20%26%20Diagnostics%20(Cheap%20Observability).png" alt="Health & Diagnostics" width="70%">
 </p>
+
+> **In plain English — "cheap observability"** means checking system health in ways that cost nothing: no AI calls, no expensive database queries, nothing that could itself slow the system down.
+> - **Top row** — "App Start" (`main.py`) → "Check `enhanced_index.json` (path, size, mtime)" → "Set Readiness Flags (`startup_results`)" → "`/GET /api/status`." When the server first boots up, it looks at the search-index file on disk exactly *once*, notes whether it found it (and how big it is, and when it was last changed — `mtime` means "modified time"), and remembers that in memory. Every later call to `/api/status` just reads that already-computed answer instantly, instead of re-checking the disk on every request.
+> - **Middle row** — `enhanced_index.json` → `/GET /api/rag/chat/index/status`. This is a *second*, separate status endpoint that re-checks the real file on disk live, every single time it's called — specifically so it can power the "Synced X ago" badge, which needs to be accurate right now, not just at boot time.
+> - **Bottom row** — `/GET /api/rag/chat/status` → "no external calls" → "LLM & Retrieval Names." The cheapest of the three: it doesn't even look at a file. It just checks which secret keys are configured (is there a Gemini key? an OpenAI key? is Supabase configured?) and reports provider names back — it never actually calls out to Gemini, OpenAI, or Supabase to "ping" them; it only reports what's *configured*, not what's currently reachable.
 
 ---
 
@@ -614,6 +679,11 @@ Both suites run automatically on every push via [`.github/workflows/ci.yml`](.gi
 **What this shows:** Vercel → Render/Uvicorn → FastAPI → Chat Router → Supabase / LLM provider / Google Drive / local index file.
 
 **Detail:** the diagram labels the LLM box "OpenAI API" — Gemini is primary now, OpenAI is the alternate. Everything else matches.
+
+> **In plain English — this diagram answers a different question than the others: not "what does the code do," but "which company's servers is each piece physically running on"**
+> - **Vercel** hosts the frontend (the actual website a person visits). **Render** hosts the backend, and **Uvicorn** is the specific program running inside Render that keeps the Python web server alive and listening for requests. The frontend talks to the backend over plain HTTP, to a path starting with `/api`.
+> - Inside the backend box: **FastAPI** (`backend/app/main.py`) is the web framework that receives every incoming request first, and immediately hands anything chat-related to the **Chat Router** (`api/chat.py`).
+> - On the right, **"Data & Services"** — the four things the Chat Router actually talks to: **Supabase** (login sessions plus the backup/audit database), an AI provider (for writing answers), **Google Drive** (where the original company documents live), and `enhanced_index.json` sitting right there on the server's own disk (the fast local search file).
 
 ### Backend → Render
 
