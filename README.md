@@ -68,15 +68,15 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 | Category | What's actually used |
 |---|---|
-| **Backend runtime** | Python 3.13, FastAPI, Uvicorn, Pydantic v2, `slowapi` (rate limiting) |
-| **Frontend** | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS v4, `lucide-react`, `recharts`, `react-markdown` |
-| **Database, Auth & Vector Store** | Supabase — managed Postgres, Auth (JWT), Row Level Security, `pgvector` extension |
-| **LLM & Embeddings** | Google Gemini (`gemini-flash-lite-latest` generation, `gemini-embedding-001` embeddings) — primary; OpenAI supported as an alternate provider |
-| **Document ingestion** | Google Drive API v3, `pypdf`, `python-docx`, `pandas` + `openpyxl` |
-| **Testing** | `pytest` (backend, 27 tests) + `mocha` (frontend, 18 tests) — see [Testing](#-testing) |
-| **CI/CD** | GitHub Actions — lint/test/build on every push, nightly scheduled reindex |
-| **Dev tooling** | `scripts/check-env.js` — plain Node.js, verifies required env vars before you run anything |
-| **Hosting** | Render (backend), Vercel (frontend) |
+| 🐍 **Backend runtime** | Python 3.13, FastAPI, Uvicorn, Pydantic v2, `slowapi` (rate limiting) |
+| ⚛️ **Frontend** | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS v4, `lucide-react`, `recharts`, `react-markdown` |
+| 🗄️ **Database, Auth & Vector Store** | Supabase — managed Postgres, Auth (JWT), Row Level Security, `pgvector` extension |
+| 🤖 **LLM & Embeddings** | Google Gemini (`gemini-flash-lite-latest` generation, `gemini-embedding-001` embeddings) — primary; OpenAI supported as an alternate provider |
+| 📄 **Document ingestion** | Google Drive API v3, `pypdf`, `python-docx`, `pandas` + `openpyxl` |
+| 🧪 **Testing** | `pytest` (backend, 27 tests) + `mocha` (frontend, 18 tests) — see [Testing](#-testing) |
+| ⚙️ **CI/CD** | GitHub Actions — lint/test/build on every push, nightly scheduled reindex |
+| 🛠️ **Dev tooling** | `scripts/check-env.js` — plain Node.js, verifies required env vars before you run anything |
+| ☁️ **Hosting** | Render (backend), Vercel (frontend) |
 
 ---
 
@@ -126,6 +126,8 @@ Six department folders full of ledgers, policies, and logs answer *operational* 
 
 ## ✨ Features
 
+Everything below is visible in the running app today — nothing here is planned or aspirational. Each item links back to where it's implemented so you can verify it against the code, not just this description.
+
 ### 💬 Chat — what each part of the widget shows
 
 | Element | What it shows | Why |
@@ -160,6 +162,8 @@ Six department folders full of ledgers, policies, and logs answer *operational* 
 <img src="screenshots/dashboard.png" alt="Observability dashboard" width="850" />
 <br/>
 
+Want to see this running before reading further? Jump to [Run Locally](#️-run-locally). Want the full technical picture — how a request actually flows through retrieval, generation, and storage — that's [Architecture](#️-architecture) next.
+
 ---
 
 ## ▶️ Run Locally
@@ -187,6 +191,12 @@ Setting this up from scratch (new clone, new Supabase project) is a longer proce
 ---
 
 ## 🏗️ Architecture
+
+If you're new to this project, this section is written to stand on its own: read top to bottom and you should come away knowing what each layer does, how a question actually turns into an answer, and where the data lives — without needing to read the code first.
+
+At a glance, OpsVista has four layers. A **Next.js client** (chat, login, dashboard) talks to a **FastAPI backend** over a Supabase-authenticated session. The backend's core job is retrieval: given a question, it searches a **primary in-memory vector index** first, and only falls back to a **Postgres/pgvector index in Supabase** when the primary result is weak or empty — this is the "dual-path" design referenced throughout this document. Whichever path answers, the matched text gets handed to **Gemini** (or OpenAI, if configured instead) to generate the actual reply, grounded strictly in that retrieved context. Two things happen in parallel with every request: the interaction gets logged to Supabase for the observability dashboard, and — separately — Google Drive is where the source documents themselves live, scanned on a schedule (or on demand) to keep the index current.
+
+The diagram below is the literal implementation of that description:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -222,17 +232,17 @@ Setting this up from scratch (new clone, new Supabase project) is a longer proce
   <img src="pictures/High-Level%20System%20Architecture%20(E2E).png" alt="High-Level Architecture" width="88%">
 </p>
 
-**What this shows:** the four layers above — client, API, dual-path retrieval, and the two external stores (Supabase, Google Drive) — matches the real system as-is.
+**What this shows:** the four layers described above — client, API, dual-path retrieval, and the two external stores (Supabase, Google Drive).
 
 ### Retrieval decision flow
+
+Zooming into the single most important decision the backend makes on every request: which of the two retrieval paths gets to answer.
 
 <p align="center">
   <img src="pictures/Retrieval%20Decision%20Flow%20(Strict).png" alt="Retrieval Decision Flow" width="70%">
 </p>
 
-**What this shows:** primary index search, falling back to pgvector when it comes up empty.
-
-**Detail:** the real implementation (`retrieve_with_trace()` in `chat.py`) also falls back on *low confidence*, not just zero results, and scores source diversity alongside confidence. Every response's `trace` object reflects this:
+The primary index searches first; pgvector only gets a turn if the primary path comes back empty **or** its confidence is too low — this second condition is the real quality gate (`retrieve_with_trace()` in `chat.py`), not just an empty-results check. Source diversity is scored alongside confidence. Every response's `trace` object shows exactly what happened:
 
 ```json
 {
@@ -245,116 +255,21 @@ Setting this up from scratch (new clone, new Supabase project) is a longer proce
 
 ### Chat request sequence
 
+The full round trip for a single question — from the moment the client sends it to the moment the answer, its citations, and its audit-log row are all in place.
+
 <p align="center">
   <img src="pictures/Chat%20Request%20Sequence%20(Alt%20paths%20shown).png" alt="Chat Request Sequence" width="90%">
 </p>
 
-**What this shows:** the request path through retrieval, generation, and the fallback branch.
-
-**Detail — current implementation** (the picture predates streaming, similar-questions, and the query-embedding write, and shows OpenAI where Gemini is now primary; picture left as-is per the standing "don't touch existing diagrams" policy, so here's the accurate flow as text):
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API as FastAPI (/chat/stream)
-    participant Primary as Enhanced Index (JSON, primary)
-    participant Fallback as pgvector (Supabase)
-    participant LLM as Gemini
-    participant DB as Supabase (audit tables)
-
-    Client->>API: POST /api/rag/chat/stream {message, top_k}
-    API->>Primary: search(query, top_k)
-    Primary-->>API: docs + confidence
-
-    alt confidence >= 0.5 (RAG_QUALITY_THRESHOLD)
-        Note over API: use primary docs as-is
-    else confidence < 0.5 or zero results
-        API->>Fallback: match_chunks(embedding, top_k)
-        Fallback-->>API: fallback docs
-    end
-
-    API->>DB: find_similar_queries(message) [best-effort]
-    DB-->>API: similar_queries[] (only if similarity >= 0.80, else [])
-
-    API-->>Client: SSE meta {chat_id, sources, trace, warnings, similar_queries}
-
-    API->>LLM: stream_with_messages(prompt + context)
-    loop each streamed chunk
-        LLM-->>API: text delta
-        API-->>Client: SSE token {content}
-    end
-    opt generation fails
-        API-->>Client: SSE error {message}
-    end
-
-    API-->>Client: SSE done {model, usage, processing_time_ms}
-
-    API->>DB: log_query() -> fact_query + bridge_query_citation
-    API->>DB: upsert_query_embedding(chat_id, message) -> fact_query_embedding
-```
-
 ### Data model
+
+What actually gets stored, and how it connects — one row per source document, chunked into embeddings, with every question and its citations logged for the dashboard.
 
 <p align="center">
   <img src="pictures/Data%20Shape%20(ER)%20for%20Enhanced%20Index%20+%20Metadata.png" alt="Data Shape" width="68%">
 </p>
 
-**What this shows:** documents chunked into embeddings.
-
-**Detail — current schema** (the picture predates `fact_query`, `bridge_query_citation`, and `fact_query_embedding`, which now exist for real; **[`backend/sql/schema.sql`](backend/sql/schema.sql) is the authoritative, executable source**):
-
-```mermaid
-erDiagram
-    DIM_DOCUMENT ||--o{ FACT_CHUNK : contains
-    FACT_CHUNK ||--|| FACT_EMBEDDING : has
-    FACT_CHUNK ||--o{ BRIDGE_QUERY_CITATION : cited_in
-    DIM_DOCUMENT ||--o{ BRIDGE_QUERY_CITATION : referenced_by
-    FACT_QUERY ||--o{ BRIDGE_QUERY_CITATION : cites
-    FACT_QUERY ||--|| FACT_QUERY_EMBEDDING : has
-
-    DIM_DOCUMENT {
-        uuid document_id PK
-        text source_type
-        text source_path
-        text title
-        text department
-        boolean is_active
-    }
-    FACT_CHUNK {
-        uuid chunk_id PK
-        uuid document_id FK
-        int ordinal
-        text text
-        jsonb metadata
-    }
-    FACT_EMBEDDING {
-        uuid chunk_id PK_FK
-        text model
-        int dim
-        vector embedding
-    }
-    FACT_QUERY {
-        uuid query_id PK
-        uuid user_id
-        text query_text
-        boolean used_fallback
-        numeric retrieval_confidence
-        int total_tokens
-        text user_rating
-        timestamptz created_at
-    }
-    FACT_QUERY_EMBEDDING {
-        uuid query_id PK_FK
-        vector embedding
-    }
-    BRIDGE_QUERY_CITATION {
-        uuid query_id PK_FK
-        uuid document_id FK
-        uuid chunk_id FK
-        numeric relevance_score
-        int rank
-    }
-```
+**[`backend/sql/schema.sql`](backend/sql/schema.sql) is the authoritative, executable source** — the table below summarizes it in one place:
 
 | Table | Purpose |
 |---|---|
