@@ -3,22 +3,22 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:CHAT] — the core request path
 #
-# This file owns everything from "a question arrived over HTTP" to "an
-# answer, its citations, and its audit-log row all exist." Every tagged
-# comment block below is independently findable — grep "OPS:CHAT-0NN" (or
-# ask for it by number) and you land exactly there, in this file or any
-# other, since the same numbering scheme is used project-wide.
+# Think of this file as a restaurant's kitchen on the night a customer's
+# order comes in. Someone (the frontend) hands a slip of paper through the
+# window with a question written on it. This file is everything that
+# happens between that slip landing on the counter and a finished plate
+# going back out: someone runs to the pantry to grab the right ingredients
+# (RETRIEVAL — go find the document snippets that actually answer this),
+# the chef turns those ingredients into a dish (GENERATION — hand them to
+# the AI model and get a written answer back), and afterwards someone
+# jots the order down in the restaurant's logbook for the manager to
+# review later (AUDIT — write it to Supabase, but never let a broken pen
+# stop the food from going out — logging failures never block an answer).
 #
-# The three things this file is actually orchestrating, in order:
-#   1. RETRIEVAL   — find the right document chunks (dual-path: primary
-#                    in-memory index, pgvector fallback on low confidence)
-#   2. GENERATION  — hand those chunks to an LLM, get an answer back
-#                    (blocking for /complete, streamed for /stream)
-#   3. AUDIT        — log the interaction to Supabase, best-effort, never
-#                    blocking the response even if logging itself fails
-#
-# See also: docs/CODE_INDEX.md for the full project-wide tag list;
-# README.md § Architecture for the diagram this file implements.
+# Every tagged comment below (e.g. [OPS:CHAT-010]) is a labelled station
+# in that kitchen — grep for the tag and you land exactly there. The same
+# tags are reused in docs/CODE_INDEX.md and in README.md's architecture
+# diagrams, so a tag means the same station no matter where you see it.
 # ═══════════════════════════════════════════════════════════════════════════
 from __future__ import annotations
 
@@ -44,16 +44,21 @@ router = APIRouter(prefix="/api/rag/chat", tags=["RAG Chat"])
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-001] ChatRequest — the body shape for POST /complete and /stream
+# [OPS:CHAT-001] ChatRequest — the order form the customer fills out
 #
-# WHAT: message = the user's question (raw text, no preprocessing expected
-#       from the client). top_k = how many chunks to retrieve (default 4 —
-#       matches the "N sources" the frontend renders). debug = when true,
-#       chat_complete() prefixes the response with raw error text instead
-#       of hiding it behind a generic fallback message.
-# VALIDATED BY: FastAPI/Pydantic automatically, before chat_complete() or
-#       chat_stream() ever runs — a malformed body never reaches this code.
-# USED BY: [OPS:CHAT-015] chat_complete(), [OPS:CHAT-020] chat_stream()
+# This is the paper slip the frontend hands over: message is the actual
+# question, written as-is with no cleanup expected. top_k is "how many
+# ingredients to fetch" — 4 by default, which is exactly how many source
+# cards show up under the answer, so turning this number up or down
+# directly changes how many citations the user sees. debug is a chef's
+# note that says "if this order goes wrong, show me the mess in the
+# kitchen instead of just apologizing to the customer" — with it on, a
+# failed AI call shows the raw error text instead of a generic message.
+#
+# Nobody in this file has to check that the slip was filled in correctly
+# — FastAPI/Pydantic reads the shape above and rejects a bad order before
+# it ever reaches the kitchen. The two places that receive this filled-in
+# slip are [OPS:CHAT-015] chat_complete() and [OPS:CHAT-020] chat_stream().
 # ─────────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
@@ -61,15 +66,18 @@ class ChatRequest(BaseModel):
     debug: bool = False
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-002] FeedbackRequest — the body shape for POST /feedback
+# [OPS:CHAT-002] FeedbackRequest — a customer's comment card, referencing
+#                 a specific past order
 #
-# WHAT: query_id must be a chat_id returned by an earlier /complete or
-#       /stream call (the frontend gets it from the SSE "meta"/"done"
-#       events). rating is constrained to exactly "up"/"down" by the
-#       Literal type — anything else is rejected before submit_feedback()
-#       runs, same validation-for-free pattern as ChatRequest above.
-# USED BY: [OPS:CHAT-021] submit_feedback()
-# WRITES TO: fact_query.user_rating via [OPS:PVEC-008] set_feedback()
+# This is a comment card the diner can only fill out if they can quote
+# their receipt number — query_id has to be a chat_id the kitchen already
+# handed them from an earlier order, so there's no way to leave feedback
+# on a meal that was never actually served. rating can only be "up" or
+# "down," nothing else — the Literal type is a printed comment card with
+# only two boxes on it, so there's no way to write in a third option by
+# mistake. [OPS:CHAT-021] submit_feedback() is the only place that reads
+# this card, and it ends up as one written note (fact_query.user_rating)
+# via [OPS:PVEC-008] set_feedback().
 # ─────────────────────────────────────────────────────────────────────────
 class FeedbackRequest(BaseModel):
     query_id: str
@@ -84,16 +92,19 @@ class RetrieveResponse(BaseModel):
     use_fake: bool
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-004] ChatResponse — the body shape returned by POST /complete
+# [OPS:CHAT-004] ChatResponse — the finished plate, served all at once
 #
-# WHAT: this is the single-JSON-response shape (as opposed to /stream's
-#       SSE events, which carry the same fields split across meta/done).
-#       trace is the dual-path retrieval trace (see [OPS:CHAT-010]) —
-#       exposing it here is what makes the frontend's TracePanel possible.
-#       similar_queries defaults to [] rather than being omitted, so the
-#       frontend never has to special-case "field missing" vs "genuinely
-#       no similar questions yet" — both render as an empty array.
-# SEE ALSO: README § API Reference → Response shape (/complete)
+# Where /stream hands the customer their meal course by course (an
+# appetizer of sources, then the main course typed out bite by bite,
+# then a dessert of usage stats), /complete just brings out the entire
+# tray in one trip once everything is ready — same ingredients, same
+# meal, different serving style. trace is the waiter's explanation of
+# which kitchen station actually cooked this (see [OPS:CHAT-010]) — it's
+# what the frontend's collapsible "Trace Panel" reads directly.
+# similar_queries defaults to an empty list rather than being left off
+# the tray entirely, so the frontend never has to guess "did the kitchen
+# forget this, or genuinely have nothing to say" — an empty list always
+# means the second one.
 # ─────────────────────────────────────────────────────────────────────────
 class ChatResponse(BaseModel):
     chat_id: str
@@ -122,22 +133,25 @@ def _safe_float(x: Any) -> float:
         return 0.0
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-005] _norm_one() — the shape-normalizer both retrieval paths
-#                 funnel through
+# [OPS:CHAT-005] _norm_one() — a universal power adapter for travel plugs
 #
-# WHAT: the primary index ([OPS:IDX-005] search()) and the pgvector
-#       fallback ([OPS:PVEC-004] pgvector_search()) return results in
-#       *different native shapes* (one's a Python dict from an in-memory
-#       search, the other's a row from a Postgres RPC response) — this
-#       function is what makes the rest of chat.py able to treat both
-#       paths identically afterward, via one common {text, score,
-#       metadata} shape.
-# WHY IT'S THIS DEFENSIVE: handles dict/tuple/object inputs and several
-#       field-name conventions (score vs similarity vs relevance) because
-#       this predates the current two-source-only reality and was written
-#       to tolerate whatever shape a search backend happened to return.
-# CALLED BY: [OPS:CHAT-007] _enhanced_retrieve(), [OPS:CHAT-008]
-#       _pgvector_retrieve() — once per raw result row.
+# Picture landing in a country where the wall socket doesn't match your
+# charger — you need an adapter so your phone doesn't care which country
+# it's in. That's this function. The fast in-memory search
+# ([OPS:IDX-005] search()) and the Postgres backup search
+# ([OPS:PVEC-004] pgvector_search()) hand back their results shaped
+# completely differently — one's a plain Python dict, the other's a row
+# straight out of a database query. This function plugs into either one
+# and always outputs the same three prongs: {text, score, metadata}.
+# Everything after this point in the file never has to ask "wait, which
+# search found this?" — it just always gets the same shape.
+#
+# It's written defensively (checking for "score" or "similarity" or
+# "relevance," "text" or "snippet" or "content") because it was built to
+# survive whatever a search backend happened to hand it, even backends
+# from earlier versions of this project that no longer exist. Called once
+# per result, from both [OPS:CHAT-007] _enhanced_retrieve() and
+# [OPS:CHAT-008] _pgvector_retrieve().
 # ─────────────────────────────────────────────────────────────────────────
 def _norm_one(record: Any) -> Dict[str, Any]:
     """
@@ -210,19 +224,24 @@ def _norm_one(record: Any) -> Dict[str, Any]:
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-006] _get_enhanced_index() — loads/constructs the primary
-#                 in-memory search instance for this request
+# [OPS:CHAT-006] _get_enhanced_index() — unlocking the pantry, fresh, every
+#                 single time someone orders
 #
-# WHAT: picks the index JSON file to use (RAG_INDEX_PATH env var, else
-#       the first of several fallback filenames that actually exists on
-#       disk), peeks at its embedding_dim to decide USE_MOCK_EMBEDDINGS,
-#       then constructs a fresh PersistedInMemorySearch [OPS:IDX-003]
-#       around it.
-# NUANCE: this reloads/re-reads the index file on *every call* rather
-#       than caching a singleton — fine at the current corpus size
-#       (~117 chunks, loads in well under a second), but worth knowing
-#       if latency profiling ever points here at a much larger corpus.
-# CALLED BY: [OPS:CHAT-007] _enhanced_retrieve(), once per request.
+# Before the kitchen can cook, someone has to go open the pantry and
+# check what's actually on the shelf — this function is that trip. It
+# figures out which pantry (which index JSON file) to open, peeks inside
+# to see what kind of ingredients are stored there (the embedding
+# dimension tells it whether these are "real" AI-generated ingredients
+# or cheap placeholder ones — USE_MOCK_EMBEDDINGS), and hands back a
+# fresh search tool built around whatever it found ([OPS:IDX-003]
+# PersistedInMemorySearch).
+#
+# It makes this trip to the pantry on *every single question asked* —
+# it never remembers what it saw last time. At today's corpus size
+# (about 117 chunks) that trip takes a fraction of a second, so it's a
+# non-issue, but if this system ever grew to hold a huge library of
+# documents, this is the first place to look if things start feeling
+# slow. Called once per request, from [OPS:CHAT-007] _enhanced_retrieve().
 # ─────────────────────────────────────────────────────────────────────────
 def _get_enhanced_index():
     """Get enhanced index search instance."""
@@ -262,20 +281,25 @@ def _get_enhanced_index():
     return PersistedInMemorySearch(index_path=idx_path)
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-007] _enhanced_retrieve() — the PRIMARY retrieval path
+# [OPS:CHAT-007] _enhanced_retrieve() — sending the fastest runner to the
+#                 nearest pantry first
 #
-# API/CALL: none directly to an external API — delegates to
-#       [OPS:IDX-005] PersistedInMemorySearch.search(), which itself
-#       calls Gemini's embed API once (to embed the question) before
-#       doing an in-memory cosine-similarity scan against every chunk.
-# RETURNS: (docs, trace) — docs is a list of {text, score, metadata},
-#       trace records which implementation answered and how many results
-#       came back, for observability (see the "trace" object in
-#       [OPS:CHAT-010]).
-# BREAKS IF: the index file is missing/corrupt — caught explicitly and
-#       turned into an empty-results trace with impl="failed" rather than
-#       raising, so a bad index degrades gracefully instead of 500ing.
-# CALLED BY: [OPS:CHAT-010] retrieve_with_trace(), always first.
+# This is always the first person sent to go find ingredients — nobody
+# calls an outside supplier before checking what's already on-site. It
+# opens the pantry ([OPS:CHAT-006]) and asks it to search
+# ([OPS:IDX-005] PersistedInMemorySearch.search()), which itself makes
+# exactly one phone call out to Gemini (to turn the question into a
+# numeric fingerprint) and then does all the actual comparing locally,
+# in memory — nothing else leaves the building.
+#
+# Comes back with two things: the ingredients it found (docs — each one
+# shaped {text, score, metadata}), and a little note about how the trip
+# went (trace — this note is what eventually becomes the "trace" panel
+# in [OPS:CHAT-010]). If the pantry itself turns out to be locked,
+# empty, or the shelf labels are unreadable (the index file is
+# missing/corrupt), this function doesn't panic the whole kitchen — it
+# just reports back "found nothing" and lets the next step decide what
+# to do. Always the first thing [OPS:CHAT-010] retrieve_with_trace() tries.
 # ─────────────────────────────────────────────────────────────────────────
 def _enhanced_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Primary retrieval using enhanced index."""
@@ -301,23 +325,26 @@ def _enhanced_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[s
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-008] _pgvector_retrieve() — the FALLBACK retrieval path
+# [OPS:CHAT-008] _pgvector_retrieve() — calling the outside supplier,
+#                 because the pantry didn't have enough
 #
-# API/CALL: [OPS:PVEC-004] pgvector_search() — which itself calls
-#       Gemini's embed API a second time (the question gets re-embedded
-#       independently here, not reused from the primary attempt) and
-#       then calls Postgres's match_chunks() RPC (SCHEMA — see
-#       backend/sql/schema.sql).
-# WHY asyncio.to_thread: supabase-py's client is synchronous; running it
-#       directly inside this async function would block the event loop
-#       for every other in-flight request while waiting on the network
-#       call. to_thread() runs it on a worker thread instead.
-# DEGRADES TO: [] (empty list) + an "error" field in trace, whenever
-#       Supabase isn't configured or the RPC fails — never raises, so a
-#       misconfigured/unreachable Supabase never breaks the primary path.
-# CALLED BY: [OPS:CHAT-010] retrieve_with_trace(), only when the primary
-#       path's confidence is too low or empty — see the two-condition
-#       gate documented there.
+# This is the phone call to the second, off-site warehouse (Supabase's
+# Postgres database) — placed only when the nearby pantry came back
+# empty-handed or unconvincing. It calls [OPS:PVEC-004] pgvector_search(),
+# which re-asks Gemini to fingerprint the question (a fresh phone call,
+# not reusing the first one) and then asks the warehouse's own search
+# tool (match_chunks(), a function living inside the database itself)
+# to find matches there.
+#
+# This call is placed on a separate line (asyncio.to_thread) so that
+# waiting for the warehouse to pick up the phone doesn't freeze every
+# other customer's order in the kitchen at the same time — Supabase's
+# client library doesn't know how to "wait politely," so it gets put on
+# its own thread instead. And if the warehouse's phone just rings and
+# rings (Supabase not configured, or the call fails), this function
+# doesn't crash the kitchen — it just shrugs and reports back nothing.
+# Only ever called by [OPS:CHAT-010] retrieve_with_trace(), and only
+# when the first pantry trip wasn't good enough.
 # ─────────────────────────────────────────────────────────────────────────
 async def _pgvector_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
@@ -345,25 +372,28 @@ async def _pgvector_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-009] Quality-gate helpers — RAG_QUALITY_THRESHOLD,
-#                 _retrieval_confidence(), _source_diversity()
+# [OPS:CHAT-009] Quality-gate helpers — the taste-tester before a dish
+#                 leaves the kitchen
 #
-# WHAT: three small pieces that together decide "was that a GOOD result,
-#       not just A result." RAG_QUALITY_THRESHOLD (default 0.5, env-
-#       overridable) is the confidence floor below which the primary
-#       path is treated as untrustworthy even though it returned
-#       something. _retrieval_confidence() is just the single best
-#       score among the results — a proxy for confidence, not a
-#       calibrated probability (worth being precise about this distinction
-#       if asked). _source_diversity() is the fraction of results coming
-#       from distinct files — a low value is a legitimate outcome (one
-#       document genuinely dominates), but the spec calls for surfacing
-#       it, not hiding it.
-# BREAKS IF: RAG_QUALITY_THRESHOLD set too high → fallback fires on nearly
-#       every request (extra Supabase round-trip + latency every time).
-#       Set too low → the quality gate stops doing anything meaningful,
-#       weak primary answers ship without a second opinion.
-# USED BY: [OPS:CHAT-010] retrieve_with_trace().
+# A dish can come out of the pantry search and still not be good enough
+# to serve — these three little pieces are the taste-test that decides
+# that. RAG_QUALITY_THRESHOLD (0.5, unless someone turns the dial via an
+# env var) is the minimum "this actually tastes right" score — anything
+# below it gets sent back even though something technically came out of
+# the kitchen. _retrieval_confidence() is just "how good was the single
+# best thing we found" — a rough gut-check, not a scientific measurement,
+# worth being honest about if someone asks whether it's a real
+# probability (it isn't). _source_diversity() answers a different
+# question: "did this meal come from one single dish, or from several
+# different ones" — a low number isn't necessarily bad (sometimes one
+# document really is the whole answer), it's just something worth
+# mentioning out loud rather than hiding.
+#
+# Turn the taste-test threshold up too high and the kitchen starts
+# calling the outside supplier on almost every order, adding delay for
+# no real benefit. Turn it down too low and the taste-test stops meaning
+# anything — bad dishes go out without a second opinion. Used entirely
+# by [OPS:CHAT-010] retrieve_with_trace().
 # ─────────────────────────────────────────────────────────────────────────
 # Below this top-score, the enhanced index result is treated as low-
 # confidence and the pgvector fallback is attempted too — not just on
@@ -390,34 +420,35 @@ def _source_diversity(docs: List[Dict[str, Any]]) -> float:
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-010] retrieve_with_trace() — THE dual-path retrieval
-#                 entrypoint (the single most important function to be
-#                 able to explain in this whole codebase)
+# [OPS:CHAT-010] retrieve_with_trace() — the head chef who decides
+#                 whether the first dish is good enough to serve, or
+#                 whether the outside supplier needs to be called
+#                 (the single most important function in this whole file)
 #
-# WHAT: tries [OPS:CHAT-007] _enhanced_retrieve() first, always. Falls
-#       back to [OPS:CHAT-008] _pgvector_retrieve() when EITHER of two
-#       conditions is true:
-#         (a) the primary path returned zero results, OR
-#         (b) the primary path's top confidence is below
-#             RAG_QUALITY_THRESHOLD [OPS:CHAT-009] — a "successful but
-#             weak" result is treated the same as no result.
-#       If the fallback finds something, its results *replace* the
-#       primary's entirely (not merged) and the trace records exactly
-#       why the fallback fired (fallback_reason). If the fallback also
-#       comes up empty, the primary's (weak) results are kept anyway —
-#       something beats nothing — and the trace notes the attempt+failure.
-# RETURNS: (docs, trace) — trace is what the frontend's TracePanel
-#       renders directly (impl, used_fallback, retrieval_confidence,
-#       source_diversity).
-# CALLED BY: [OPS:CHAT-011] retrieve_endpoint() (debug endpoint),
-#       [OPS:CHAT-015] chat_complete(), [OPS:CHAT-020] chat_stream()
-#       (inside event_generator()) — every entry point into retrieval
-#       goes through this one function, so the quality-gate logic only
-#       has to be correct in one place.
-# TESTED BY: backend/tests/test_chat_quality_gate.py — with
-#       _enhanced_retrieve/_pgvector_retrieve monkeypatched, so these
-#       tests exercise the branching logic without touching a real
-#       index or Supabase.
+# Every single order starts the same way: send the fastest runner to the
+# nearby pantry first, no exceptions ([OPS:CHAT-007]). Then the head
+# chef tastes what came back and makes exactly one call: is this good
+# enough to serve? Only two things would make the answer "no" —
+# (a) the runner came back completely empty-handed, or (b) they brought
+# something back, but the taste-test score is below the "good enough"
+# line ([OPS:CHAT-009]). A weak, mediocre result is treated exactly the
+# same as no result at all — there's no partial credit.
+#
+# If "no," the chef picks up the phone and calls the outside supplier
+# ([OPS:CHAT-008]). If the supplier actually delivers something, that
+# entirely REPLACES the first attempt — the two never get mixed
+# together on one plate — and the ticket gets a note explaining exactly
+# why the second call was made. If even the supplier comes up empty, the
+# chef shrugs and serves the original weak dish anyway, because a
+# mediocre answer beats an empty plate, and makes a note that both
+# attempts happened.
+#
+# Whatever comes back — the dish itself, plus the ticket explaining how
+# it was made — is exactly what the frontend's "Trace Panel" reads and
+# displays to the customer. Every single door into this restaurant that
+# needs food (the debug endpoint, /complete, /stream) walks through this
+# one chef and no other — which means the "is this good enough" rule
+# only ever has to be written correctly in one place.
 # ─────────────────────────────────────────────────────────────────────────
 async def retrieve_with_trace(q: str, top_k: int = 4, force_fake: bool = False):
     """
@@ -459,14 +490,19 @@ async def retrieve_with_trace(q: str, top_k: int = 4, force_fake: bool = False):
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-011] GET /_retrieve — debug endpoint, retrieval only, no LLM
+# [OPS:CHAT-011] GET /_retrieve — the kitchen's back door, for a health
+#                 inspector who just wants to see the ingredients, not
+#                 eat the meal
 #
-# WHAT: exposes retrieve_with_trace() [OPS:CHAT-010] directly over HTTP,
-#       with a use_fake flag that forces force_fake=True (skips the
-#       fallback branch entirely) — useful for inspecting exactly what
-#       the primary index alone would return, without a second Supabase
-#       round-trip in the way.
-# RATE LIMIT: 30/minute (via @limiter.limit, see [OPS:RATE-001]).
+# This lets someone stand right next to [OPS:CHAT-010]'s head chef and
+# watch the exact same pantry-then-supplier decision happen, without
+# ordering a finished meal — no AI call, no cost, just "show me what you
+# found and why." The use_fake switch is a note pinned to the ticket
+# that says "don't bother calling the outside supplier even if you'd
+# normally want to" — useful when you specifically want to see what the
+# nearby pantry alone has, with nothing else muddying the picture.
+# Limited to 30 requests/minute so nobody can hammer it accidentally
+# (see [OPS:RATE-001]).
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/_retrieve", response_model=RetrieveResponse)
 @limiter.limit("30/minute")
@@ -487,16 +523,18 @@ async def retrieve_endpoint(
     }
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-012] _render_sources() — shapes retrieved docs into the
-#                 citation objects the frontend actually renders
+# [OPS:CHAT-012] _render_sources() — writing the ingredient labels the
+#                 customer actually sees on the receipt
 #
-# WHAT: truncates to `limit` (== body.top_k), and appends "(Google Drive)"
-#       to the display label when the source is a real Drive file — this
-#       is purely presentational, distinct from _build_context_texts()
-#       [OPS:CHAT-013] which shapes the *same* docs for the LLM prompt.
-# CONSUMED BY (frontend): the sources[] array in the "meta" SSE event and
-#       the ChatResponse.sources field — rendered by SourceCard /
-#       SourcesToggle in page.tsx [OPS:FE-CHAT].
+# Same ingredients as the kitchen used, but relabelled for the dining
+# room — this is purely about presentation, distinct from the function
+# right below it which repackages the very same ingredients for the
+# chef's own recipe card instead. It trims the list down to however many
+# sources should show (limit), and tacks "(Google Drive)" onto the label
+# when a source really did come from Drive, so the diner knows where
+# their food came from. This is exactly what shows up as the citation
+# cards under an answer in the chat UI — read directly by SourceCard /
+# SourcesToggle in page.tsx.
 # ─────────────────────────────────────────────────────────────────────────
 def _render_sources(docs: List[Dict[str, Any]], limit: int = 4) -> List[Dict[str, Any]]:
     out = []
@@ -538,28 +576,24 @@ def _build_context_texts(docs: List[Dict[str, Any]]) -> List[str]:
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-014] Token budget — CHARS_PER_TOKEN_ESTIMATE,
-#                 MAX_CONTEXT_TOKENS, _estimate_tokens(),
-#                 _enforce_token_budget()
+# [OPS:CHAT-014] Token budget — packing a suitcase that has a weight limit
 #
-# WHAT: a soft ceiling (default 6000 tokens, env-overridable) on how much
-#       retrieved context gets sent to the LLM in one prompt. Chunks
-#       arrive already sorted best-to-worst by relevance score, so the
-#       greedy keep-until-budget-exhausted loop naturally drops the
-#       *least* relevant chunks first when something has to give.
-# WHY 4 CHARS/TOKEN: a rough English-text heuristic, deliberately not
-#       using a real tokenizer library — tiktoken is OpenAI-specific and
-#       wouldn't match Gemini's actual tokenizer anyway, so a precise
-#       count would be precisely wrong for half the possible providers.
-# EDGE CASE HANDLED: a single chunk alone bigger than the whole budget
-#       gets hard-truncated (kept partially) rather than dropped entirely
-#       — some context beats none.
-# BREAKS IF: MAX_CONTEXT_TOKENS set too low → context gets aggressively
-#       cut, "warnings" fills up with truncation notices, answer quality
-#       degrades. Too high → risk of exceeding the LLM's actual context
-#       window, which this soft budget is specifically meant to prevent.
-# USED BY: [OPS:CHAT-015] chat_complete(), [OPS:CHAT-020] chat_stream().
-# TESTED BY: backend/tests/test_chat_quality_gate.py.
+# There's a limit to how much luggage the AI can carry onto the plane
+# (roughly 6000 "tokens" — small word-pieces, not whole words — unless
+# someone changes the dial). The ingredients already arrive sorted
+# best-to-worst, so the packing strategy is simple: keep throwing things
+# in the suitcase in that order until it won't zip shut, then stop —
+# which means whatever gets left behind is always the least important
+# stuff, never the best.
+#
+# "4 characters per token" is a rough, deliberately-imprecise ruler — not
+# a real tokenizer — because a precisely-correct ruler for one AI
+# provider (OpenAI's tiktoken) would be precisely wrong for the other
+# one this app also supports (Gemini). Close enough beats exactly wrong.
+# One special case: if a single item is bigger than the whole suitcase
+# by itself, it doesn't get left behind entirely — it gets trimmed down
+# to fit, because a partial souvenir beats no souvenir at all. Used by
+# both /complete and /stream, right before the prompt gets built.
 # ─────────────────────────────────────────────────────────────────────────
 # 4 chars/token is a standard rough estimate for English text — good enough
 # for a soft context budget without adding a tokenizer dependency (tiktoken
@@ -603,32 +637,27 @@ def _enforce_token_budget(context_texts: List[str], max_tokens: int = MAX_CONTEX
     return kept, truncated
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-015] POST /complete — the non-streaming chat endpoint (the
-#                 "original" endpoint; [OPS:CHAT-020] /stream is the
-#                 later SSE upgrade with the same underlying pipeline)
+# [OPS:CHAT-015] POST /complete — the sit-down meal, served all at once
+#                 once it's completely ready (the original way this
+#                 kitchen served food; /stream, below, is the newer
+#                 "food comes out as it's cooked" version of the exact
+#                 same recipe)
 #
-# FULL FLOW, IN ORDER:
-#   1. [OPS:CHAT-010] retrieve_with_trace() — dual-path retrieval
-#   2. warnings[] populated based on what happened (empty/fallback/
-#      fallback-also-empty) — this is what the frontend surfaces as
-#      user-visible caveats, not hidden in a log only.
-#   3. [OPS:PVEC-007] find_similar_queries() — best-effort, wrapped in
-#      try/except so a Supabase hiccup here can never break the answer.
-#   4. LLM call via [OPS:LLM-003] LLMClient.complete_with_messages() —
-#      on failure, falls back to literally showing the raw retrieved
-#      text instead of nothing (see the except block below).
-#   5. Response assembled into the ChatResponse [OPS:CHAT-004] shape.
-#   6. Audit logging: [OPS:PVEC-005] log_query() then [OPS:PVEC-006]
-#      upsert_query_embedding() — logging happens BEFORE the embedding
-#      write specifically so this exact query can never match itself in
-#      a future similar-queries lookup.
-# API/CALL: Gemini generate_content (via LLMClient), Gemini embed_content
-#       (via retrieval + find_similar_queries), Supabase REST (via
-#       log_query/upsert_query_embedding).
-# RATE LIMIT: 20/minute.
-# AUTH: optional — Depends(get_current_user_optional) [OPS:AUTH-001]
-#       means an anonymous request still gets an answer; user_id is just
-#       None on the logged row in that case.
+# The whole order, start to finish: go find ingredients
+# ([OPS:CHAT-010]) → jot down anything unusual on the ticket for the
+# customer to see (empty pantry? had to call the supplier? that's a
+# "warning") → separately, quietly check "has anyone ordered something
+# like this before?" as a bonus, never letting that check hold up the
+# meal if it fails → hand the ingredients to the chef to actually cook
+# (the AI call) — if the chef can't cook for any reason, the raw
+# ingredients get served plain instead of an empty plate → plate
+# everything up into the finished response → and only after the
+# customer already has their food, quietly write the order down in the
+# restaurant's logbook (writing the log entry before the "have I seen
+# this order before" fingerprint, specifically so this exact order can
+# never show up as its own "similar order" later). No login required to
+# eat here — an anonymous diner still gets served, their receipt just
+# has no name on it.
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/complete", response_model=ChatResponse)
 @limiter.limit("20/minute")
@@ -776,55 +805,45 @@ async def chat_complete(
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-019] _sse_event() — formats one Server-Sent Event frame
+# [OPS:CHAT-019] _sse_event() — folding one note and sliding it under the
+#                 door, in a format the person on the other side already
+#                 knows how to unfold
 #
-# WHAT: the SSE wire format is literally "event: <name>\ndata: <json>\n\n"
-#       — two trailing newlines mark the end of a frame. This is the one
-#       place that format is constructed, so [OPS:CHAT-020]'s generator
-#       just calls this repeatedly with different event names/payloads.
-# CONSUMED BY (frontend): page.tsx's hand-rolled SSE parser
-#       [OPS:FE-CHAT] — splits on "\n\n" to find frame boundaries, then
-#       "\n" to find the event:/data: lines within one frame.
+# Two people passing notes under a door need to agree in advance on how
+# to tell where one note ends and the next begins — here that agreement
+# is "every note ends with exactly two blank lines." This one small
+# function is the only place in the whole backend that folds a note this
+# way; [OPS:CHAT-020]'s generator just keeps calling it with different
+# messages. On the other side of the door, page.tsx's parser is doing
+# the exact reverse — unfolding notes by looking for those same two
+# blank lines.
 # ─────────────────────────────────────────────────────────────────────────
 def _sse_event(event: str, data: Dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-020] POST /stream — the streaming chat endpoint
+# [OPS:CHAT-020] POST /stream — the exact same meal as /complete, but
+#                 brought to the table course by course instead of all
+#                 at once
 #
-# WHAT: identical retrieval+generation pipeline to [OPS:CHAT-015]
-#       chat_complete(), restructured as an async generator so each
-#       piece of the answer can reach the client the moment it's
-#       available, instead of the client waiting for the entire
-#       response to finish generating.
-#
-# EVENT SEQUENCE (in the order they actually fire):
-#   meta    → retrieval is done, before generation starts: chat_id,
-#             sources, trace, warnings, similar_queries.
-#   warning → optional, only if context had to be truncated mid-flow.
-#   token   → one per chunk streamed back from the LLM (many of these).
-#   error   → only if generation itself fails AFTER retrieval succeeded
-#             (retrieval failures are already folded into "warnings" in
-#             the meta event, not sent as a separate error).
-#   done    → generation finished: chat_id, model, usage (estimated —
-#             see the comment on prompt_tokens/completion_tokens below),
-#             processing_time_ms.
-#
-# WHY usage IS ESTIMATED HERE (not exact, unlike a real API-reported
-#       count): neither Gemini's nor OpenAI's streaming API reports
-#       token usage consistently on every chunk — so this reuses the
-#       same 4-chars/token heuristic as [OPS:CHAT-014]'s context budget,
-#       applied to the actual prompt text and the actual generated
-#       content, after the fact.
-# API/CALL: Gemini generate_content_stream (via
-#       [OPS:LLM-004] LLMClient.stream_with_messages()).
-# RATE LIMIT: 20/minute — same limit as /complete, since it's the same
-#       underlying cost (one retrieval + one generation call).
-# request_start IS CAPTURED OUTSIDE event_generator() specifically so
-#       processing_time_ms measures the whole request lifecycle,
-#       matching how /complete measures it — not just the generator's
-#       own runtime.
+# Same kitchen, same recipe, same ingredients as [OPS:CHAT-015] — the
+# only thing that changes is how it's served. Instead of waiting in the
+# kitchen until the entire tray is ready, each piece goes out to the
+# table the moment it exists. In order: an "appetizer" note arrives
+# first, before the chef has even started cooking — it tells the
+# customer which ingredients are being used, so they know what's coming.
+# Then, if the ingredients had to be trimmed to fit the suitcase
+# ([OPS:CHAT-014]), a quick "heads up" note. Then the main course comes
+# out one small bite at a time, as the chef finishes each piece — this
+# is the part that makes the answer look like it's "typing itself" on
+# screen. If the chef burns the dish partway through, one apology note
+# explains what went wrong. And finally, a closing note: which chef
+# cooked it, roughly how much was eaten (an estimate, since neither AI
+# provider reliably reports an exact count mid-stream — reusing the same
+# rough 4-characters-per-token ruler from [OPS:CHAT-014]), and how long
+# the whole meal took, timed from the moment the order was placed, not
+# just from when cooking started.
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/stream")
 @limiter.limit("20/minute")
@@ -970,16 +989,18 @@ async def chat_stream(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-021] POST /feedback — thumbs up/down on a completed answer
+# [OPS:CHAT-021] POST /feedback — the comment card getting dropped in the
+#                 box by the door on the way out
 #
-# WHAT: query_id must match a chat_id from an earlier /complete or
-#       /stream call. Writes straight to fact_query.user_rating via
-#       [OPS:PVEC-008] set_feedback() — best-effort, "recorded": false
-#       just means Supabase wasn't reachable, never a hard error, since
-#       a missing audit write shouldn't visibly break the UI interaction
-#       the user just performed.
-# RATE LIMIT: 60/minute — much higher than chat endpoints, since a
-#       feedback click is cheap (one DB update, no LLM/embedding calls).
+# The card has to name a real receipt (query_id must match a chat_id
+# from an earlier meal) — no anonymous complaints about a meal that was
+# never served. Writing it down is a quick, cheap, low-stakes action
+# ([OPS:PVEC-008] set_feedback() — just one line in a logbook), so if the
+# logbook happens to be locked at that exact moment, the diner still
+# walks out feeling fine — they get a quiet "recorded: false" instead of
+# the restaurant making a scene about it. Allowed far more often than
+# ordering food (60/minute vs 20/minute) because dropping a card in a
+# box costs the kitchen nothing.
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/feedback")
 @limiter.limit("60/minute")
@@ -1001,13 +1022,14 @@ async def submit_feedback(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-022] GET /status — LLM + retrieval provider status
+# [OPS:CHAT-022] GET /status — reading the "OPEN" sign in the window,
+#                 not actually walking inside
 #
-# WHAT: deliberately cheap and side-effect-free — no LLM calls, no
-#       embedding calls; just checks which API key env vars are set and
-#       whether pgvector_store.is_configured() [OPS:PVEC-001] returns
-#       true. Meant to be safe to poll frequently (the frontend calls it
-#       on every page load).
+# This doesn't call the chef or the supplier at all — it just glances at
+# which keys are hanging by the door (which API-key env vars are set)
+# and whether the warehouse's phone line is even plugged in
+# ([OPS:PVEC-001] is_configured()). Costs nothing, so it's safe for the
+# frontend to check this every single time someone loads the page.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/status")
 def status():
@@ -1033,15 +1055,16 @@ def status():
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-023] GET /index/status — index file metadata, public, no auth
+# [OPS:CHAT-023] GET /index/status — checking the "best before" stamp on
+#                 the pantry itself
 #
-# WHAT: reads the index JSON file's size/mtime directly off disk — this
-#       is what powers the frontend's "Synced X ago" badge (via
-#       formatRelativeTime() on file_info.modified_epoch). Note the
-#       index_metadata fields (version/total_documents/embedding_model)
-#       are usually null in practice — the current index file format
-#       doesn't carry those top-level keys, only "dim" and "items"; only
-#       file_info (size, mtime) is reliably populated.
+# This one does walk over and physically look at the pantry file's size
+# and last-changed timestamp, live, every time it's called — that's what
+# lets the frontend's "Synced X ago" badge tell the truth right now, not
+# just at boot time. Fair warning: a few of the fields this reports
+# (version, total_documents, embedding_model) are usually empty in
+# practice, because the pantry's actual label format doesn't carry those
+# details today — only the size and timestamp are reliably real.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/index/status")
 def get_index_status():
@@ -1095,15 +1118,15 @@ def get_index_status():
 # =========================
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:CHAT-024] initialize_chat_system() — currently unused helper
+# [OPS:CHAT-024] initialize_chat_system() — a spare key nobody uses
 #
-# NUANCE: this function is not actually called anywhere in main.py's
-#       startup sequence — main.py's lifespan does its own index-existence
-#       check inline (with the Supabase rehydration logic layered on top,
-#       see [OPS:MAIN-002]) rather than calling this. Left in place as a
-#       simple standalone status check; worth knowing it's dead code if
-#       asked "what does this do" — the honest answer is "nothing calls
-#       it right now."
+# Somebody cut this key and hung it on the wall, but the actual front
+# door (main.py's boot-time lifespan check) uses a different, newer
+# lock now — one with the Supabase self-healing logic built in
+# ([OPS:MAIN-002]). This key still turns, technically, but nothing in
+# the building ever reaches for it. Worth being upfront about if asked
+# "what does this do" — the honest answer is "nothing calls it, it's
+# leftover."
 # ─────────────────────────────────────────────────────────────────────────
 async def initialize_chat_system():
     """Initialize the simplified chat system."""
