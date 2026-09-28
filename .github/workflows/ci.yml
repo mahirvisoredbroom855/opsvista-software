@@ -1,3 +1,9 @@
+# [OPS:CI-002] Pull-request / push CI — pytest + smoke-import (backend),
+# lint + unit tests + build (frontend). branches: lists the exact branches
+# whose pushes trigger this — this is the config that was historically
+# broken (only listed main/master while the real work happened on
+# feat/rag-chatbot, so CI silently never ran until that branch was added
+# here explicitly).
 name: CI
 
 on:
@@ -34,10 +40,11 @@ jobs:
         run: pytest -v
 
       - name: Smoke-import the FastAPI app
-        # pytest never imports app.main (tests target chat.py's helpers
-        # directly), so a missing dependency used only there — e.g. slowapi —
-        # can pass CI and still crash the real server on boot. This mirrors
-        # exactly what `uvicorn app.main:app` does at process start.
+        # [OPS:CI-002b] pytest never imports app.main (tests target chat.py's
+        # helpers directly), so a missing dependency used only there — e.g.
+        # slowapi [OPS:RATE-001] — can pass CI and still crash the real
+        # server on boot. This mirrors exactly what `uvicorn app.main:app`
+        # does at process start.
         env:
           USE_MOCK_EMBEDDINGS: "true"
         run: python -c "import app.main"

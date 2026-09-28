@@ -1,11 +1,19 @@
 name: Scheduled Reindex
 
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE: [OPS:CI-001] — the daily automated reindex trigger
+#
 # Keeps the knowledge base current without anyone remembering to click a
-# button. discover_documents() (backend/build_drive_index.py) does a full
-# Drive rescan each run — no incremental diffing — so a nightly cadence is
-# a deliberate cost/freshness tradeoff, not a limitation of this workflow.
-# Trigger a run manually anytime from the Actions tab (workflow_dispatch)
-# if you need fresher data sooner than the schedule.
+# button. discover_documents() ([OPS:ING-002a], backend/build_drive_index.py)
+# does a full Drive rescan each run — no incremental diffing — so a nightly
+# cadence is a deliberate cost/freshness tradeoff, not a limitation of this
+# workflow. Trigger a run manually anytime from the Actions tab
+# (workflow_dispatch) if you need fresher data sooner than the schedule.
+# Calls [OPS:ADMIN-001b]/[OPS:ADMIN-001c] over HTTP, authenticated via the
+# X-Automation-Token header path in [OPS:AUTH-005]
+# require_roles_or_automation_token() — this is the one real caller that
+# needs that headless-auth escape hatch to exist at all.
+# ═══════════════════════════════════════════════════════════════════════
 on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC daily
@@ -15,6 +23,10 @@ jobs:
   reindex:
     runs-on: ubuntu-latest
     steps:
+      # [OPS:CI-001a] POST /api/rag/admin/reindex [OPS:ADMIN-001b]. A 200
+      # (started) or 409 (already running — treated as success, matches the
+      # dashboard's ReindexButton [OPS:FE-DASH-a] behavior) are both fine;
+      # anything else fails the job.
       - name: Trigger reindex
         id: trigger
         run: |
@@ -27,6 +39,11 @@ jobs:
             exit 1
           fi
 
+      # [OPS:CI-001b] polls GET /reindex/status [OPS:ADMIN-001c] every 15s,
+      # up to 60 times (15 min ceiling) — same status endpoint the
+      # dashboard's ReindexButton [OPS:FE-DASH-a] polls, just with a fixed
+      # interval here instead of self-rescheduling JS. Job fails (exit 1)
+      # if the final status isn't "completed" when polling stops.
       - name: Poll until the background reindex finishes
         run: |
           status="running"
