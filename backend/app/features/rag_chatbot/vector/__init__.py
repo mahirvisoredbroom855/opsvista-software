@@ -12,7 +12,7 @@ Vector module initialization with safe imports.
 
 # Safe imports with fallbacks
 try:
-    from .enhanced_vector_client import EnhancedVectorDatabaseClient, create_vector_client
+    from .legacy.enhanced_vector_client import EnhancedVectorDatabaseClient, create_vector_client
 except ImportError:
     EnhancedVectorDatabaseClient = None
     create_vector_client = None
@@ -23,7 +23,7 @@ except ImportError:
     PersistedInMemorySearch = None
 
 try:
-    from .sophisticated_embedding_system import SophisticatedEmbeddingSystem
+    from .legacy.sophisticated_embedding_system import SophisticatedEmbeddingSystem
 except ImportError:
     SophisticatedEmbeddingSystem = None
 
