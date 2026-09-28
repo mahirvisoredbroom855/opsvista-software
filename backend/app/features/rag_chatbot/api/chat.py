@@ -19,6 +19,9 @@
 # in that kitchen — grep for the tag and you land exactly there. The same
 # tags are reused in docs/CODE_INDEX.md and in README.md's architecture
 # diagrams, so a tag means the same station no matter where you see it.
+#
+# In practice: this file runs every time someone types into the OpsVista
+# chat box and hits Send.
 # ═══════════════════════════════════════════════════════════════════════════
 from __future__ import annotations
 
@@ -59,6 +62,9 @@ router = APIRouter(prefix="/api/rag/chat", tags=["RAG Chat"])
 # — FastAPI/Pydantic reads the shape above and rejects a bad order before
 # it ever reaches the kitchen. The two places that receive this filled-in
 # slip are [OPS:CHAT-015] chat_complete() and [OPS:CHAT-020] chat_stream().
+#
+# In practice: this is what lands on the server the instant someone
+# types a question and hits Send.
 # ─────────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
@@ -78,6 +84,9 @@ class ChatRequest(BaseModel):
 # mistake. [OPS:CHAT-021] submit_feedback() is the only place that reads
 # this card, and it ends up as one written note (fact_query.user_rating)
 # via [OPS:PVEC-008] set_feedback().
+#
+# In practice: fires when someone clicks the thumbs up/down icon under
+# an answer.
 # ─────────────────────────────────────────────────────────────────────────
 class FeedbackRequest(BaseModel):
     query_id: str
@@ -105,6 +114,9 @@ class RetrieveResponse(BaseModel):
 # the tray entirely, so the frontend never has to guess "did the kitchen
 # forget this, or genuinely have nothing to say" — an empty list always
 # means the second one.
+#
+# In practice: this is the exact JSON /complete hands back — the
+# answer text, citations, and all.
 # ─────────────────────────────────────────────────────────────────────────
 class ChatResponse(BaseModel):
     chat_id: str
@@ -152,6 +164,9 @@ def _safe_float(x: Any) -> float:
 # from earlier versions of this project that no longer exist. Called once
 # per result, from both [OPS:CHAT-007] _enhanced_retrieve() and
 # [OPS:CHAT-008] _pgvector_retrieve().
+#
+# In practice: whether an answer's source came from the fast index or
+# the Supabase backup, this makes both look identical afterward.
 # ─────────────────────────────────────────────────────────────────────────
 def _norm_one(record: Any) -> Dict[str, Any]:
     """
@@ -242,6 +257,9 @@ def _norm_one(record: Any) -> Dict[str, Any]:
 # non-issue, but if this system ever grew to hold a huge library of
 # documents, this is the first place to look if things start feeling
 # slow. Called once per request, from [OPS:CHAT-007] _enhanced_retrieve().
+#
+# In practice: this trip runs fresh on every single question typed in
+# the chat box — nothing is ever cached between requests.
 # ─────────────────────────────────────────────────────────────────────────
 def _get_enhanced_index():
     """Get enhanced index search instance."""
@@ -300,6 +318,9 @@ def _get_enhanced_index():
 # missing/corrupt), this function doesn't panic the whole kitchen — it
 # just reports back "found nothing" and lets the next step decide what
 # to do. Always the first thing [OPS:CHAT-010] retrieve_with_trace() tries.
+#
+# In practice: this is what runs the instant a question arrives, before
+# anything else happens.
 # ─────────────────────────────────────────────────────────────────────────
 def _enhanced_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Primary retrieval using enhanced index."""
@@ -345,6 +366,9 @@ def _enhanced_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[s
 # doesn't crash the kitchen — it just shrugs and reports back nothing.
 # Only ever called by [OPS:CHAT-010] retrieve_with_trace(), and only
 # when the first pantry trip wasn't good enough.
+#
+# In practice: fires when someone asks something the fast index isn't
+# confident about — an obscure finance or maintenance question, say.
 # ─────────────────────────────────────────────────────────────────────────
 async def _pgvector_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
@@ -390,10 +414,13 @@ async def _pgvector_retrieve(q: str, top_k: int) -> Tuple[List[Dict[str, Any]], 
 # mentioning out loud rather than hiding.
 #
 # Turn the taste-test threshold up too high and the kitchen starts
-# calling the outside supplier on almost every order, adding delay for
+# calling the outside supplier on almost every order, adding delay with
 # no real benefit. Turn it down too low and the taste-test stops meaning
 # anything — bad dishes go out without a second opinion. Used entirely
 # by [OPS:CHAT-010] retrieve_with_trace().
+#
+# In practice: 0.5 is the line that decides whether OpsVista trusts its
+# first answer or quietly double-checks.
 # ─────────────────────────────────────────────────────────────────────────
 # Below this top-score, the enhanced index result is treated as low-
 # confidence and the pgvector fallback is attempted too — not just on
@@ -449,6 +476,9 @@ def _source_diversity(docs: List[Dict[str, Any]]) -> float:
 # needs food (the debug endpoint, /complete, /stream) walks through this
 # one chef and no other — which means the "is this good enough" rule
 # only ever has to be written correctly in one place.
+#
+# In practice: every single question typed into OpsVista passes through
+# this one function first.
 # ─────────────────────────────────────────────────────────────────────────
 async def retrieve_with_trace(q: str, top_k: int = 4, force_fake: bool = False):
     """
@@ -503,6 +533,9 @@ async def retrieve_with_trace(q: str, top_k: int = 4, force_fake: bool = False):
 # nearby pantry alone has, with nothing else muddying the picture.
 # Limited to 30 requests/minute so nobody can hammer it accidentally
 # (see [OPS:RATE-001]).
+#
+# In practice: use this to see exactly what got retrieved for a
+# question, without waiting on an AI reply.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/_retrieve", response_model=RetrieveResponse)
 @limiter.limit("30/minute")
@@ -535,6 +568,9 @@ async def retrieve_endpoint(
 # their food came from. This is exactly what shows up as the citation
 # cards under an answer in the chat UI — read directly by SourceCard /
 # SourcesToggle in page.tsx.
+#
+# In practice: this builds the little citation cards you see under
+# every chat answer.
 # ─────────────────────────────────────────────────────────────────────────
 def _render_sources(docs: List[Dict[str, Any]], limit: int = 4) -> List[Dict[str, Any]]:
     out = []
@@ -594,6 +630,9 @@ def _build_context_texts(docs: List[Dict[str, Any]]) -> List[str]:
 # by itself, it doesn't get left behind entirely — it gets trimmed down
 # to fit, because a partial souvenir beats no souvenir at all. Used by
 # both /complete and /stream, right before the prompt gets built.
+#
+# In practice: kicks in when a broad question like "summarize Q3
+# finance" pulls back more source text than the AI can read in one go.
 # ─────────────────────────────────────────────────────────────────────────
 # 4 chars/token is a standard rough estimate for English text — good enough
 # for a soft context budget without adding a tokenizer dependency (tiktoken
@@ -658,6 +697,9 @@ def _enforce_token_budget(context_texts: List[str], max_tokens: int = MAX_CONTEX
 # never show up as its own "similar order" later). No login required to
 # eat here — an anonymous diner still gets served, their receipt just
 # has no name on it.
+#
+# In practice: this is what runs if something outside the chat UI (a
+# script, /docs) asks a question and just wants one plain JSON reply.
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/complete", response_model=ChatResponse)
 @limiter.limit("20/minute")
@@ -817,6 +859,9 @@ async def chat_complete(
 # messages. On the other side of the door, page.tsx's parser is doing
 # the exact reverse — unfolding notes by looking for those same two
 # blank lines.
+#
+# In practice: every flickering word you see typed live in the OpsVista
+# chat window passed through this line first.
 # ─────────────────────────────────────────────────────────────────────────
 def _sse_event(event: str, data: Dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -844,6 +889,9 @@ def _sse_event(event: str, data: Dict[str, Any]) -> str:
 # rough 4-characters-per-token ruler from [OPS:CHAT-014]), and how long
 # the whole meal took, timed from the moment the order was placed, not
 # just from when cooking started.
+#
+# In practice: this is the actual function that runs when you hit Send
+# in the OpsVista chat window.
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/stream")
 @limiter.limit("20/minute")
@@ -1001,6 +1049,9 @@ async def chat_stream(
 # the restaurant making a scene about it. Allowed far more often than
 # ordering food (60/minute vs 20/minute) because dropping a card in a
 # box costs the kitchen nothing.
+#
+# In practice: fires the moment someone clicks a thumbs-up/down icon on
+# a past answer.
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/feedback")
 @limiter.limit("60/minute")
@@ -1030,6 +1081,9 @@ async def submit_feedback(
 # and whether the warehouse's phone line is even plugged in
 # ([OPS:PVEC-001] is_configured()). Costs nothing, so it's safe for the
 # frontend to check this every single time someone loads the page.
+#
+# In practice: this is the tiny "LLM Online" note at the top of the
+# chat page.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/status")
 def status():
@@ -1065,6 +1119,9 @@ def status():
 # (version, total_documents, embedding_model) are usually empty in
 # practice, because the pantry's actual label format doesn't carry those
 # details today — only the size and timestamp are reliably real.
+#
+# In practice: this is what powers the "Synced 3 hours ago" badge in
+# the chat header.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/index/status")
 def get_index_status():
@@ -1127,6 +1184,9 @@ def get_index_status():
 # the building ever reaches for it. Worth being upfront about if asked
 # "what does this do" — the honest answer is "nothing calls it, it's
 # leftover."
+#
+# In practice: if you go searching for what calls this, you won't find
+# anything — it's unused.
 # ─────────────────────────────────────────────────────────────────────────
 async def initialize_chat_system():
     """Initialize the simplified chat system."""
