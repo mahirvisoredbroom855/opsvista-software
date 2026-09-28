@@ -7,17 +7,16 @@ answer, an analytical question gets a longer, structured one). It also
 folds in the retrieved document snippets so the AI has real material
 to answer from, instead of just guessing.
 """
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:LLM-004] — prompt assembly (system prompt + context
-#          integration + adaptive length directives)
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:LLM-004]
 #
-# get_prompt_for_query() [OPS:LLM-004d] is the one function chat.py
-# actually calls; everything else in this file is a helper it composes.
-# This is where "never write abstract [D1] citation markers" and "use
-# BDT/USD with thousands separators" and "no LaTeX" live — instructions
-# specific to how THIS app's frontend renders answers and what THIS
-# company's data looks like, not generic prompt-engineering advice.
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: builds the actual text instructions sent to the AI
+# model. get_prompt_for_query() is the one function chat.py calls
+# directly — everything else here is a helper it uses to build that
+# final prompt (the fixed company-context system prompt, folding in
+# retrieved document snippets, and picking a length/structure directive
+# based on what kind of question was asked).
+# ─────────────────────────────────────────────────────────────────────────
 
 from typing import List, Dict, Any
 import re
@@ -26,13 +25,16 @@ import re
 # ---------------------------
 # System prompt (technical)
 # ---------------------------
-# [OPS:LLM-004a] create_prompt_engineering_system() — the static system
-# prompt: company context (departments, equipment, customers), tone rules,
-# the "never write [D1]-style markers — the UI already shows real source
-# cards" instruction (this is WHY [OPS:CHAT-012] _render_sources() and the
-# frontend's citation cards exist as separate UI, not inline in the
-# answer text), and the adaptive length policy that
-# [OPS:LLM-004c] _classify_query() below implements per-request.
+# [OPS:LLM-004a] create_prompt_engineering_system()
+#
+# What it does: returns one fixed block of instruction text, sent as the
+# "system" message on every single request. It tells the model what
+# company it's answering for, what tone to use, to write currency with
+# proper formatting, and — importantly — to never write bracket-style
+# citation markers like "[D1]", because the frontend already shows the
+# real source documents as separate cards below the answer.
+#
+# Called by: get_prompt_for_query(), once per request.
 def create_prompt_engineering_system() -> str:
     """Create a technical, business-focused system prompt for OpsVista."""
     return """You are **OpsVista Assistant**, a pragmatic, technical business assistant for
@@ -95,24 +97,20 @@ def create_prompt_integrator() -> 'PromptIntegrator':
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:LLM-004b] PromptIntegrator — folds retrieved chunks into one
-#                 context block, with its OWN independent size cap
+# [OPS:LLM-004b] PromptIntegrator
 #
-# WHAT: takes at most the top 5 of the already-token-budgeted context
-#       texts [OPS:CHAT-014] _enforce_token_budget() already trimmed,
-#       truncates each individual chunk to 900 chars, then hard-caps the
-#       WHOLE combined block at max_context_length=4000 chars as a final
-#       safety net.
-# NUANCE — TWO INDEPENDENT BUDGETS, NOT ONE: chat.py's
-#       _enforce_token_budget() [OPS:CHAT-014] already trims the chunk
-#       LIST by an estimated token count (default 6000 tokens ≈ 24000
-#       chars) before this class ever sees it; this class then applies
-#       its own SEPARATE, smaller, character-based cap (4000 chars) on
-#       top. The two aren't coordinated by a shared constant — this is
-#       a real overlap in the codebase worth being explicit about if
-#       asked "how many context-size limits are there," since the
-#       honest answer is "two, applied in sequence, for different units."
-# CALLED BY: [OPS:LLM-004d] get_prompt_for_query(), once per request.
+# What it does: takes the retrieved document snippets and joins them
+# into one text block to paste into the prompt. It keeps at most the top
+# 5 snippets, cuts each one down to 900 characters, and then, as a final
+# safety net, cuts the WHOLE combined block down to 4000 characters if
+# it's still too long.
+#
+# Note: chat.py already trims the snippet list down by an estimated
+# token count before this ever runs — so there are actually two separate
+# size limits applied back to back, one by token estimate and one here
+# by raw character count, and they aren't tied to the same number.
+#
+# Called by: get_prompt_for_query(), once per request.
 # ─────────────────────────────────────────────────────────────────────────
 class PromptIntegrator:
     """Basic prompt integrator for combining document context with queries."""
@@ -162,13 +160,16 @@ _LOOKUP_RE = re.compile(
     r"^(find|show|get|list|where|when|status|lookup|retrieve)\b", re.IGNORECASE
 )
 
-# [OPS:LLM-004c] _classify_query() — regex-based intent heuristic (NOT an
-# LLM call, NOT a classifier model — plain regex against the raw query
-# text), picking one of three length/structure directives (analytical /
-# lookup / general) baked into the user-message template by
-# [OPS:LLM-004d] get_prompt_for_query(). Deliberately cheap: runs
-# synchronously, in-process, on every single request with zero added
-# latency or API cost.
+# [OPS:LLM-004c] _classify_query()
+#
+# What it does: guesses what kind of question this is using plain
+# keyword-matching regex — no AI model involved, no extra API call. It
+# checks the question text against two word lists (analytical words like
+# "compare"/"trend"/"total", or lookup words like "find"/"show"/"where")
+# and returns one of three instructions telling the model how long and
+# how structured its answer should be.
+#
+# Called by: get_prompt_for_query(), once per request.
 def _classify_query(query: str) -> Dict[str, Any]:
     """Return a small directive based on the query text."""
     if _ANALYTICAL_RE.search(query or ""):
@@ -203,17 +204,15 @@ def create_business_prompt_templates():
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:LLM-004d] get_prompt_for_query() — THE function chat.py actually
-#                 calls; assembles system + user messages
+# [OPS:LLM-004d] get_prompt_for_query()
 #
-# CALLS: create_prompt_engineering_system() [OPS:LLM-004a],
-#       PromptIntegrator [OPS:LLM-004b] (context folding),
-#       _classify_query() [OPS:LLM-004c] (adaptive directive).
-# RETURNS: [{"role": "system", ...}, {"role": "user", ...}] — the exact
-#       messages-list shape [OPS:LLM-002]/[OPS:LLM-002b]'s backends
-#       expect (OpenAI natively; Gemini via _messages_to_prompt()
-#       flattening it to one string).
-# CALLED BY: [OPS:CHAT-015] chat_complete(), [OPS:CHAT-020] chat_stream().
+# What it does: the one function chat.py actually calls. It combines the
+# fixed system prompt, the folded-together document context, and the
+# per-question length directive into the final two-message list — one
+# "system" message, one "user" message — in the exact shape the LLM
+# backends expect.
+#
+# Called by: chat_complete() and chat_stream() in chat.py.
 # ─────────────────────────────────────────────────────────────────────────
 def get_prompt_for_query(query: str, context_docs: List[str]) -> List[Dict[str, str]]:
     """Generate a complete prompt for a business query with adaptive guidance."""

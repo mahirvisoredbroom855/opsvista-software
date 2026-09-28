@@ -7,15 +7,15 @@ the app never has to know or care which one is actually configured.
 Whichever API key is set in the environment decides which provider
 runs.
 """
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:LLM] — the generation layer (as opposed to [OPS:IDX]/
-#          [OPS:PVEC], which are retrieval/embedding)
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:LLM]
 #
-# Two concrete backends (OpenAILLM, GeminiLLM) behind one interface
-# (LLMClient), each implementing complete() (blocking) and stream()
-# (async generator) — so chat.py's [OPS:CHAT-015]/[OPS:CHAT-020] never
-# need to know which provider is actually active.
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: two provider classes (OpenAILLM, GeminiLLM) that both
+# offer the same two methods — complete() (wait for the whole answer)
+# and stream() (yield the answer piece by piece). LLMClient picks one of
+# the two based on which API key is set, so chat.py never needs to know
+# which provider is actually running.
+# ─────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import os
@@ -42,21 +42,16 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:LLM-002] OpenAILLM — the OpenAI backend (higher provider priority
-#                 than Gemini, see [OPS:LLM-001]'s known bug note)
+# [OPS:LLM-002] OpenAILLM
 #
-# API/CALL: OpenAI chat.completions.create() — both complete() (stream=
-#       False, one response object) and stream() (stream=True, an
-#       iterator of delta chunks) use the exact same _chat_args() request
-#       shape, differing only in that one flag — keeps the two code
-#       paths from silently drifting in model/temperature/max_tokens.
-# NUANCE (stream()): guards chunk.choices/.delta/.delta.content all being
-#       truthy before yielding — OpenAI's streaming protocol sends
-#       chunks with an empty delta (e.g. the first chunk, which only
-#       carries role) that would otherwise yield an empty/None string.
-# BREAKS IF: OPENAI_API_KEY unset — raises at construction (__init__),
-#       which is why [OPS:LLM-003] LLMClient only constructs this class
-#       when it has already confirmed the key is set.
+# What it does: talks to OpenAI's chat API. complete() waits and returns
+# the full answer at once; stream() sends back one small piece of text
+# at a time as OpenAI generates it, skipping the empty pieces OpenAI's
+# streaming protocol sometimes sends (like the very first chunk, which
+# carries no actual text). Raises an error immediately at construction
+# if OPENAI_API_KEY isn't set.
+#
+# Called by: LLMClient, when OPENAI_API_KEY is set.
 # ─────────────────────────────────────────────────────────────────────────
 class OpenAILLM:
     def __init__(self):
@@ -131,22 +126,18 @@ class OpenAILLM:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:LLM-002b] GeminiLLM — the Gemini backend (the one actually active
-#                 in this deployment — see the provider-priority bug at
-#                 [OPS:LLM-001])
+# [OPS:LLM-002b] GeminiLLM
 #
-# API/CALL: Gemini generate_content() (complete()) / generate_content_
-#       stream() (stream()) — genai.Client.models.
-# NUANCE (_messages_to_prompt): Gemini's simple generate_content API
-#       takes ONE prompt string, not a chat-message list like OpenAI's
-#       API — so this method folds the {system, user} messages list
-#       [OPS:LLM-004] get_prompt_for_query() builds into a single joined
-#       string, tagging non-user roles with a "[role]" prefix so the
-#       distinction survives the flattening. This is a deliberate
-#       simplification (not Gemini's full multi-turn chat API) since
-#       this app is single-turn Q&A per request, not a persisted
-#       conversation.
-# BREAKS IF: GEMINI_API_KEY unset — raises at construction.
+# What it does: same job as OpenAILLM, but talks to Google Gemini
+# instead — this is the provider actually meant to run in production.
+# Gemini's API only accepts one plain text string, not a list of
+# {system, user} messages like OpenAI, so _messages_to_prompt() joins
+# them into one string first, labeling non-user messages with a
+# "[role]" prefix so the distinction isn't lost. Raises an error
+# immediately at construction if GEMINI_API_KEY isn't set.
+#
+# Called by: LLMClient, when GEMINI_API_KEY is set (and OPENAI_API_KEY
+# is not).
 # ─────────────────────────────────────────────────────────────────────────
 class GeminiLLM:
     """Google Gemini backend (free tier via Google AI Studio)."""
@@ -220,31 +211,23 @@ class GeminiLLM:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:LLM-001] / [OPS:LLM-003] LLMClient — the single entrypoint chat.py
-#                 imports; provider selection lives here
+# [OPS:LLM-001] / [OPS:LLM-003] LLMClient
 #
-# WHAT: constructs whichever backend ([OPS:LLM-002] OpenAILLM or
-#       [OPS:LLM-002b] GeminiLLM) matches the first API key found, then
-#       exposes a uniform surface: complete_with_messages() (blocking,
-#       used by [OPS:CHAT-015] chat_complete()), stream_with_messages()
-#       (async generator, used by [OPS:CHAT-020] chat_stream()).
-#       last_usage is stashed as instance state after every call so the
-#       caller can read token counts without a second return value —
-#       this is what chat.py reads into its `usage` dict.
-# KNOWN BUG (documented, not fixed — same class of bug as [OPS:IDX-002]
-#       embed_texts()'s provider-priority order): if BOTH OPENAI_API_KEY
-#       and GEMINI_API_KEY are set in the environment, OpenAI silently
-#       wins here — there's no warning, no way to force Gemini short of
-#       unsetting OPENAI_API_KEY. This matters because this project's
-#       real deployment intentionally runs on Gemini (its free tier);
-#       an accidentally-set OPENAI_API_KEY would silently switch the
-#       active model without any visible error.
-# CALLS: OpenAILLM.__init__ / GeminiLLM.__init__ — both can raise if
-#       their own required env var isn't actually set despite the outer
-#       os.getenv() check passing (e.g. an empty string) — that
-#       exception propagates up to chat.py's own try/except around LLM
-#       construction, which is what triggers the retrieval-only fallback
-#       response documented at [OPS:CHAT-015].
+# What it does: the one class chat.py actually imports. On construction,
+# it checks which API key is set and builds the matching backend
+# (OpenAILLM or GeminiLLM), then offers one shared set of methods
+# (complete_with_messages(), stream_with_messages()) regardless of which
+# one it picked. It also remembers the token usage from the last call in
+# self.last_usage, so the caller can read it afterward instead of
+# needing a second return value.
+#
+# Known bug, not fixed: if BOTH OPENAI_API_KEY and GEMINI_API_KEY are
+# set, OpenAI silently wins, with no warning — even though this app's
+# real deployment is meant to run on Gemini's free tier. An accidentally
+# set OPENAI_API_KEY would silently switch which model answers every
+# question.
+#
+# Called by: chat_complete() and chat_stream() in chat.py.
 # ─────────────────────────────────────────────────────────────────────────
 class LLMClient:
     """

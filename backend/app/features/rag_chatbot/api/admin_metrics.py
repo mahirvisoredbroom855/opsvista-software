@@ -33,16 +33,16 @@ from fastapi import APIRouter, Depends, Query, Request
 from app.core.auth_deps import require_roles
 from app.core.rate_limit import limiter
 
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:ADMIN-002] — dashboard metrics API
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:ADMIN-002]
 #
-# One endpoint (GET /metrics) that reads the audit-trail tables
-# [OPS:PVEC-005] log_query() writes on every chat request, and aggregates
-# them in Python (not SQL GROUP BY) into the shape the dashboard's
-# charts/tables expect. Auth: [OPS:AUTH-004] require_roles — strict
-# session required, no automation-token escape hatch (contrast with
-# [OPS:ADMIN-001]'s reindex endpoint, which needs headless CI access).
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: one endpoint (GET /metrics) that reads the rows
+# log_query() already wrote for every past chat request, and adds them
+# up into the numbers the dashboard shows — average response time,
+# how often the backup search kicked in, most-cited documents, and a
+# recent-activity log. Requires a real login as Owner or Admin — no
+# automation-token shortcut here.
+# ─────────────────────────────────────────────────────────────────────────
 _require_admin = require_roles(["Owner", "Admin"])
 
 router = APIRouter(prefix="/api/rag/admin", tags=["Admin Metrics"])
@@ -54,9 +54,14 @@ def _service_client():
     return get_service_client()
 
 
-# [OPS:ADMIN-002b] _percentile() — nearest-rank percentile (not
-# interpolated), used for p95 latency. Fine for a dashboard metric where
-# exact interpolation precision doesn't matter.
+# [OPS:ADMIN-002b] _percentile()
+#
+# What it does: sorts a list of numbers and picks the one at a given
+# percentile rank (e.g. 0.95 for "the value 95% of requests were faster
+# than"). It picks the nearest actual value rather than interpolating
+# between two — close enough for a dashboard number.
+#
+# Called by: get_metrics(), to compute p95 latency.
 def _percentile(values: List[float], pct: float) -> Optional[float]:
     if not values:
         return None
@@ -66,31 +71,19 @@ def _percentile(values: List[float], pct: float) -> Optional[float]:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:ADMIN-002a] GET /metrics — dashboard aggregation endpoint
+# [OPS:ADMIN-002a] GET /metrics
 #
-# API/CALL: Supabase REST reads only (fact_query, bridge_query_citation,
-#       dim_document, fact_chunk) — no LLM/embedding calls, this is
-#       pure post-hoc analytics over what [OPS:PVEC-005] log_query()
-#       already wrote.
-# WHAT IT COMPUTES: summary (avg/p95 latency via [OPS:ADMIN-002b]
-#       _percentile(), fallback rate, avg confidence, token totals),
-#       a daily timeseries, top-cited documents/departments (by joining
-#       bridge_query_citation → dim_document within the window), a
-#       recent-queries log table (capped at 50 rows), and index
-#       freshness (total docs/chunks + most recent ingestion time).
-# WHY PYTHON AGGREGATION, NOT SQL: at current query volume (low
-#       thousands/week) pulling up to 5000 raw rows and reducing them in
-#       Python is simpler to reason about and just as fast as writing
-#       Postgres-side GROUP BY functions — same "don't build for scale
-#       you don't have yet" reasoning as skipping the ivfflat ANN index.
-#       Revisit if query volume grows large enough that a 5000-row pull
-#       becomes the bottleneck.
-# NUANCE: citations_resp.in_("query_id", query_ids[:1000]) hard-caps at
-#       1000 IDs — a PostgREST practical limit on IN-clause list size;
-#       harmless today since this endpoint is capped at 90 days/window
-#       and typical volume stays well under that.
-# CALLED BY (frontend): dashboard/page.tsx [OPS:FE-DASH].
-# RATE LIMIT: 60/minute.
+# What it does: pulls up to 5000 recent query log rows from Supabase for
+# the requested day window, then in plain Python (not a SQL query) adds
+# them up into: a summary (average/p95 latency, how often the backup
+# search ran, average confidence, token totals), a per-day timeseries,
+# the most-cited documents and departments, the 50 most recent queries
+# for the log table, and how fresh the index is (document/chunk counts,
+# last ingest time). Doing the math in Python instead of SQL is simpler
+# at this traffic volume and can be revisited if query volume grows a
+# lot.
+#
+# Called by: dashboard/page.tsx, on page load. Limited to 60 requests/minute.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/metrics")
 @limiter.limit("60/minute")

@@ -37,16 +37,15 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from app.core.auth_deps import require_roles_or_automation_token
 from app.core.rate_limit import limiter
 
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:ADMIN-001] — admin-triggered reindex API
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:ADMIN-001]
 #
-# The one endpoint the scheduled-reindex.yml GitHub Action [OPS:CI-001]
-# calls at 03:00 UTC daily, plus the same logic reachable manually from
-# the dashboard. Runs the SAME discovery/ingestion code path as the CLI
-# script build_drive_index.py — deliberately not a separate reimplemen-
-# tation — so "run it from cron" and "run it from the CLI" can never
-# silently drift apart in behavior.
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: rebuilds the entire search index from Google Drive from
+# scratch. It reuses the exact same scan/chunk/embed code as the
+# build_drive_index.py CLI script, rather than a separate copy of that
+# logic, so the nightly cron job and a manual "Reindex now" click always
+# behave identically.
+# ─────────────────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/rag/admin", tags=["Admin Reindex"])
 logger = logging.getLogger(__name__)
 
@@ -68,30 +67,22 @@ _reindex_state: Dict[str, Any] = {
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:ADMIN-001a] _run_reindex() — the full pipeline: Drive scan → chunk →
-#                 embed → rebuild JSON index → dual-write pgvector
+# [OPS:ADMIN-001a] _run_reindex()
 #
-# API/CALL: Google Drive API (via GoogleDriveService [OPS:DRIVE-001]),
-#       Gemini embed_content (via [OPS:IDX-002] embed_texts(), inside
-#       PersistedInMemorySearch.ingest_documents() [OPS:IDX-004]),
-#       Supabase REST (via [OPS:PVEC-003] upsert_documents()).
-# CALLS: discover_documents() (build_drive_index.py [OPS:DRIVE-003]),
-#       backup_index_if_exists() [OPS:ING-001e], PersistedInMemorySearch
-#       [OPS:IDX-003]/[OPS:IDX-004], upsert_documents() [OPS:PVEC-003].
-# WHY FULL REBUILD, NOT INCREMENTAL: the JSON index has no dedup/upsert
-#       logic on append — ingest_documents() always appends — so a
-#       repeated incremental reindex would accumulate duplicate chunks
-#       over time. Deleting and rebuilding from scratch (matching
-#       build_drive_index.py --reset) is what keeps it correct;
-#       pgvector's side is safe either way since it upserts on a real
-#       conflict key (document_id, ordinal).
-# RUNS AS: a background task (threading, not asyncio) — a full Drive
-#       scan + re-embed can take minutes, so this can't block the HTTP
-#       response; _reindex_lock + _reindex_state give the polling
-#       GET /reindex/status endpoint something to read concurrently.
-# CALLED BY: [OPS:ADMIN-001b] trigger_reindex() via
-#       BackgroundTasks.add_task(); also invoked identically by the CI
-#       cron job hitting POST /reindex — same code, same guarantees.
+# What it does: the actual reindex pipeline. Connects to Google Drive,
+# lists every document in the tracked folders, deletes the old local
+# index file, rebuilds it from scratch (chunking and embedding every
+# document again), and pushes the same data to Supabase. It always
+# rebuilds from zero rather than adding incrementally, because the local
+# index file has no way to detect and skip a duplicate chunk — adding
+# incrementally would slowly fill it with repeats.
+#
+# Runs on a background thread (not the request thread) because a full
+# Drive scan and re-embed can take several minutes — it updates a shared
+# `_reindex_state` dict as it goes, which the status endpoint reads.
+#
+# Called by: trigger_reindex(), as a background task — both the
+# dashboard's manual button and the nightly cron job go through it.
 # ─────────────────────────────────────────────────────────────────────────
 def _run_reindex(folder_names: Optional[List[str]] = None) -> None:
     with _reindex_lock:
@@ -157,19 +148,18 @@ def _run_reindex(folder_names: Optional[List[str]] = None) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:ADMIN-001b] POST /reindex — kicks off _run_reindex() as a
-#                 background task; returns immediately with "started"
+# [OPS:ADMIN-001b] POST /reindex
 #
-# RATE LIMIT: 3/minute — deliberately much stricter than chat endpoints,
-#       since a reindex is an expensive Drive scan + full re-embedding
-#       run, not a cheap per-request operation. The 409 "already in
-#       progress" guard (via _reindex_state) is the real protection
-#       against overlapping runs; the rate limit is a secondary guard
-#       against accidental rapid-fire triggering.
-# AUTH: [OPS:AUTH-005] — Owner/Admin session OR X-Automation-Token.
-# CALLED BY (over HTTP): the dashboard's manual "Reindex now" action;
-#       scheduled-reindex.yml's [OPS:CI-001] daily cron, using
-#       X-Automation-Token instead of a session.
+# What it does: starts _run_reindex() running in the background and
+# replies immediately with "started" — it doesn't wait for the reindex
+# to finish. If a reindex is already running, it replies with an error
+# (409) instead of starting a second one at the same time. Accepts
+# either a logged-in Owner/Admin, or the automation token the nightly
+# cron job uses instead. Limited to 3 requests/minute, since a reindex
+# is an expensive operation, not something meant to be triggered rapidly.
+#
+# Called by: the dashboard's "Reindex now" button, and the nightly
+# GitHub Action.
 # ─────────────────────────────────────────────────────────────────────────
 @router.post("/reindex")
 @limiter.limit("3/minute")
@@ -185,9 +175,15 @@ def trigger_reindex(
     return {"status": "started", "message": "Reindex running in background; poll GET /api/rag/admin/reindex/status"}
 
 
-# [OPS:ADMIN-001c] GET /reindex/status — polled by the dashboard and by
-# scheduled-reindex.yml's [OPS:CI-001] status-check step after triggering
-# a reindex, since the actual work runs in a background thread.
+# [OPS:ADMIN-001c] GET /reindex/status
+#
+# What it does: just returns the current state dict — whether a reindex
+# is idle, running, completed, or failed, and its result once done.
+# Exists because the actual reindex runs in the background, so the
+# caller has to poll this to find out when it's finished.
+#
+# Called by: the dashboard (while showing a "reindexing..." spinner) and
+# the nightly GitHub Action, right after it triggers a reindex.
 @router.get("/reindex/status")
 def reindex_status(current_user: Dict[str, Any] = Depends(_require_admin)) -> Dict[str, Any]:
     return _reindex_state
