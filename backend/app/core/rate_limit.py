@@ -11,21 +11,19 @@ import and apply @limiter.limit(...) decorators without a circular import
 back to main.py.
 """
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:RATE-001] limiter — the shared slowapi Limiter instance
+# [OPS:RATE-001] limiter
 #
-# WHAT: key_func=get_remote_address means limits are per-client-IP, not
-#       per-user — an authenticated and anonymous request from the same
-#       IP share one bucket. default_limits=["120/minute"] applies to
-#       any route WITHOUT its own @limiter.limit(...) decorator; routes
-#       that specify one (e.g. [OPS:CHAT-015] 20/minute, [OPS:ADMIN-001]
-#       3/minute) override the default for that route specifically.
-# WHY A SEPARATE MODULE: main.py registers the SlowAPIMiddleware and the
-#       429 exception handler against this same `limiter` instance — if
-#       route files imported it from main.py instead, that would create
-#       a circular import (main.py imports the routers, which would need
-#       to import back from main.py).
-# CALLED BY: every @router.post/@router.get decorated with
-#       @limiter.limit(...) across chat.py, discovery.py, admin_metrics.py.
+# What it does: creates one shared rate limiter that counts requests per
+# visitor IP address, not per logged-in account — a logged-in and
+# anonymous request from the same IP share the same counter. By default
+# any route gets 120 requests/minute; specific routes (like chat, at
+# 20/minute) set their own tighter limit and override this default.
+#
+# Lives in its own file, separate from main.py, only so route files can
+# import it without creating a circular import back to main.py.
+#
+# Called by: every route decorated with @limiter.limit(...) in chat.py,
+# discovery.py, and admin_metrics.py.
 # ─────────────────────────────────────────────────────────────────────────
 from slowapi import Limiter
 from slowapi.util import get_remote_address

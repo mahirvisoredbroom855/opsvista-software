@@ -15,38 +15,28 @@ from fastapi import Header, HTTPException, Depends
 
 from app.core.supabase_jwt import verify_supabase_token
 
-# ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:AUTH] — request-time authentication & role gating
 #
-# Three layers, each building on the last: [OPS:AUTH-001] extracts and
-# verifies a bearer token WITHOUT rejecting the request if it's missing
-# (used for endpoints that work anonymously but personalize when logged
-# in, e.g. chat_complete()'s user_id); [OPS:AUTH-003] wraps that with a
-# hard 401 for routes that require a session; [OPS:AUTH-004] adds role
-# checking (403) on top of that; [OPS:AUTH-005] is the special case that
-# also accepts a static automation token for headless callers like the
-# reindex cron job, which can't hold a Supabase session at all.
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: three layers, each building on the last.
+# get_current_user_optional() checks a login token but never rejects
+# the request if it's missing. get_current_user() wraps that with a
+# hard 401 for routes that require a login. require_roles() adds a
+# role check (403) on top. require_roles_or_automation_token() is the
+# special case that also accepts a secret key for headless callers
+# like the reindex cron job, which has no human login at all.
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:AUTH-001] get_current_user_optional() — FastAPI Depends() dependency,
-#                 the root of every auth check in this codebase
+# [OPS:AUTH-001] get_current_user_optional()
 #
-# API/CALL: [OPS:AUTH-002] verify_supabase_token() — a full Supabase Auth
-#       API round-trip, not local JWT decoding.
-# WHAT: parses "Authorization: Bearer <token>" manually via str.split()
-#       (not FastAPI's OAuth2PasswordBearer — this app doesn't use OAuth2
-#       password flow, just raw bearer tokens issued by Supabase client-
-#       side auth). ANY failure — missing header, wrong scheme, malformed
-#       token, expired token, Supabase unreachable — is swallowed into a
-#       plain None return, never an exception. That's what makes this
-#       dependency safe to use on endpoints that must still work for
-#       anonymous callers.
-# CALLED BY (via Depends()): [OPS:CHAT-015] chat_complete(),
-#       [OPS:CHAT-020] chat_stream(), [OPS:CHAT-021] submit_feedback(),
-#       and — one layer removed — every route using [OPS:AUTH-003]
-#       get_current_user() or [OPS:AUTH-004] require_roles(), since both
-#       depend on this function first.
+# What it does: reads the "Authorization: Bearer <token>" header and
+# asks Supabase to verify it. Any failure at all — missing header,
+# wrong format, expired token, Supabase unreachable — just returns
+# None, never raises an error. That's what makes this safe to use on
+# endpoints that still have to work for people who aren't logged in.
+#
+# Called by: chat_complete(), chat_stream(), submit_feedback() — and,
+# one layer removed, every route using get_current_user() or
+# require_roles(), since both depend on this function first.
 # ─────────────────────────────────────────────────────────────────────────
 # Optional auth dependency: returns payload dict or None
 def get_current_user_optional(authorization: str | None = Header(default=None)) -> Optional[Dict[str, Any]]:
@@ -65,16 +55,15 @@ def get_current_user_optional(authorization: str | None = Header(default=None)) 
 # ─────────────────────────────────────────────────────────────────────────
 # [OPS:AUTH-003] get_current_user() — the hard-401 variant
 #
-# WHAT: a thin Depends()-on-Depends() wrapper — reuses [OPS:AUTH-001]
-#       entirely rather than re-verifying, and just turns its "None"
-#       outcome into an actual HTTPException. This dependency-chaining
-#       pattern (rather than a separate strict verification path) is
-#       what keeps the two auth modes from ever disagreeing about what
-#       counts as a valid token.
-# CALLED BY: any endpoint requiring a logged-in user but no specific
-#       role (none currently in this codebase call it directly — routes
-#       needing auth all also need a role check, so they use
-#       [OPS:AUTH-004] require_roles() instead, which depends on this).
+# What it does: reuses get_current_user_optional() entirely — never
+# re-verifies the token itself — and just turns a None result into a
+# real 401 error. Because it reuses rather than duplicates the check,
+# the optional and strict versions can never disagree about what
+# counts as a valid token.
+#
+# Called by: nothing directly today — every route needing auth also
+# needs a role check, so they use require_roles() instead, which
+# depends on this.
 # ─────────────────────────────────────────────────────────────────────────
 # Strict auth (401 if no/invalid token)
 def get_current_user(user: Dict[str, Any] | None = Depends(get_current_user_optional)) -> Dict[str, Any]:
@@ -83,19 +72,16 @@ def get_current_user(user: Dict[str, Any] | None = Depends(get_current_user_opti
     return user
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:AUTH-004] require_roles() — role-based access control (RBAC),
-#                 returns a Depends()-able closure
+# [OPS:AUTH-004] require_roles() — role-based access control
 #
-# WHAT: a dependency FACTORY, not a dependency itself — called once at
-#       router-definition time with the allowed role list
-#       (e.g. require_roles(["Owner", "Admin"])), producing a function
-#       FastAPI can actually use with Depends(). Role comes from Supabase
-#       app_metadata.role (set via
-#       supabase.auth.admin.update_user_by_id(), an out-of-band admin
-#       action — there's no self-service role assignment in this app).
-# CALLED BY: [OPS:ADMIN-002] admin_metrics.py's _require_admin =
-#       require_roles(["Owner", "Admin"]) — evaluated once at import
-#       time and reused across all metrics routes.
+# What it does: this doesn't check anything itself — it BUILDS a
+# checking function. Call it once with an allowed role list (e.g.
+# require_roles(["Owner","Admin"])) and it hands back a function
+# FastAPI can use as a dependency. The actual role comes from a field
+# Supabase stores on the user's account, set manually by an Owner —
+# there's no self-service way for a user to grant themselves a role.
+#
+# Called by: admin_metrics.py, gating every metrics route.
 # ─────────────────────────────────────────────────────────────────────────
 # Role guard (403 if role not allowed)
 def require_roles(roles: List[str]) -> Callable:
@@ -109,27 +95,21 @@ def require_roles(roles: List[str]) -> Callable:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:AUTH-005] require_roles_or_automation_token() — RBAC + headless
-#                 automation escape hatch
+# [OPS:AUTH-005] require_roles_or_automation_token()
 #
-# WHAT: same shape/purpose as [OPS:AUTH-004] require_roles(), plus one
-#       extra path: a static shared-secret header
-#       ("X-Automation-Token") that, if it matches REINDEX_AUTOMATION_
-#       TOKEN, short-circuits straight to an approved response WITHOUT
-#       ever calling get_current_user_optional() — because the caller
-#       (a GitHub Actions cron job) has no Supabase session to present.
-# SECURITY NUANCE: uses secrets.compare_digest() (constant-time
-#       comparison), not `==`, specifically so response-time can't leak
-#       how many leading characters of the token matched — a standard
-#       timing-attack mitigation for secret comparison.
-# BREAKS IF: REINDEX_AUTOMATION_TOKEN is unset — the whole automation
-#       branch is then unreachable (configured_token is falsy), so a
-#       misconfigured deployment safely falls through to requiring a
-#       real user session, never silently open.
-# CALLED BY: [OPS:ADMIN-001] discovery.py's
-#       _require_admin = require_roles_or_automation_token(["Owner", "Admin"])
-#       — used by POST /api/rag/admin/reindex, the endpoint the
-#       scheduled-reindex.yml GitHub Action [OPS:CI-001] actually calls.
+# What it does: same as require_roles(), plus one extra path — a
+# secret header ("X-Automation-Token") that, if it matches the
+# server's configured value, is accepted immediately without checking
+# for a login at all. This exists because the nightly cron job has no
+# human account to log in with. The comparison uses a constant-time
+# check (secrets.compare_digest) instead of plain "==", so a timing
+# attack can't be used to guess the secret one character at a time. If
+# the secret env var is never set, this whole path is simply
+# unreachable and the endpoint always requires a real login — never
+# silently open.
+#
+# Called by: discovery.py, gating POST /api/rag/admin/reindex — the
+# endpoint the nightly GitHub Action calls.
 # ─────────────────────────────────────────────────────────────────────────
 # Same role guard, but also accepts a static shared-secret header instead of a
 # Supabase session — for headless callers (a scheduled reindex cron job) that
