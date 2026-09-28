@@ -14,12 +14,13 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-// [OPS:FE-LOGIN] — sign-in/sign-up screen, calls Supabase Auth directly from
-// the browser (supabase.auth.signInWithPassword / signUp) — the backend
-// never sees a password, only the resulting access token on later requests
-// (via [OPS:AUTH-001] get_current_user_optional()). Three-mode state machine
-// (signin/signup/confirm-pending) rather than separate routes, so switching
-// modes doesn't lose in-progress form state.
+// [OPS:FE-LOGIN] LoginPage
+//
+// What it does: the sign-in/sign-up form. Calls Supabase Auth directly
+// from the browser — the backend never sees a password, only the login
+// token from a later request. It's one component with three modes
+// (signin / signup / confirm-pending) rather than three separate pages,
+// so switching modes doesn't lose whatever the user already typed.
 type Mode = "signin" | "signup" | "confirm-pending";
 
 export default function LoginPage() {
@@ -35,13 +36,20 @@ export default function LoginPage() {
     setErr(null);
   }
 
-  // [OPS:FE-LOGIN-a] submit() — the only place this file talks to Supabase.
-  // signup's data.session check: if email confirmation is disabled on the
-  // Supabase project, signUp() returns an active session immediately (goes
-  // straight to the app); if enabled, session is null and the UI switches
-  // to "confirm-pending" instead — supabaseClient's detectSessionInUrl
-  // [OPS:FE-LIB-001] is what picks up the session automatically once the
-  // user clicks the emailed confirmation link and lands back on the app.
+  // [OPS:FE-LOGIN-a] submit()
+  //
+  // What it does: the only place this file actually talks to Supabase.
+  // For sign-in, it logs in and redirects to the chat page. For
+  // sign-up, it checks whether Supabase handed back an active session
+  // right away — if email confirmation is turned off on this Supabase
+  // project, it did, so the user goes straight into the app; if it's
+  // required, session is null and the screen switches to
+  // "confirm-pending" instead. Once the user clicks the emailed
+  // confirmation link, the Supabase client picks up the session
+  // automatically when they land back on the app.
+  //
+  // Called by: the "Sign in" / "Create account" button, and Enter in any
+  // form field.
   async function submit() {
     setBusy(true);
     setErr(null);

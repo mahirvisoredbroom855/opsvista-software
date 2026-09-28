@@ -39,14 +39,15 @@ import {
 } from "recharts";
 import { supabase } from "../../lib/supabaseClient";
 
-// ═══════════════════════════════════════════════════════════════════════
-// MODULE: [OPS:FE-DASH] — the observability dashboard
+// ─────────────────────────────────────────────────────────────────────────
+// MODULE: [OPS:FE-DASH]
 //
-// Fetches [OPS:ADMIN-002a] GET /api/rag/admin/metrics and renders the
-// Metrics type below (kept in sync by hand with the backend's response
-// shape — no shared schema/codegen between the two). ReindexButton
-// [OPS:FE-DASH-a] separately drives [OPS:ADMIN-001b]/[OPS:ADMIN-001c].
-// ═══════════════════════════════════════════════════════════════════════
+// What it does: fetches GET /api/rag/admin/metrics and renders it as
+// charts, stat tiles, and tables. The Metrics type below is kept in sync
+// by hand with the backend's response shape — there's no shared schema
+// between the two. ReindexButton, further down, is a separate piece
+// that drives the reindex trigger/status endpoints.
+// ─────────────────────────────────────────────────────────────────────────
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ||
   "http://localhost:8000";
@@ -153,12 +154,17 @@ type ReindexStatus = {
   error: string | null;
 };
 
-// [OPS:FE-DASH-a] ReindexButton — trigger() POSTs [OPS:ADMIN-001b]
-// /reindex, then poll() calls [OPS:ADMIN-001c] GET /reindex/status every
-// 3s while status stays "running" (self-rescheduling via setTimeout, not
-// setInterval — avoids overlapping requests if one poll is slow). A 409
-// (already running) from trigger() is treated as success, not an error,
-// since it just means an in-flight reindex is already being tracked.
+// [OPS:FE-DASH-a] ReindexButton()
+//
+// What it does: the "Reindex now" button. trigger() sends the POST
+// request that starts a reindex, then poll() checks the status endpoint
+// every 3 seconds and reschedules itself with setTimeout (not
+// setInterval, so it can't send overlapping requests if a check is
+// slow) as long as the status is still "running". If the backend says a
+// reindex is already running (a 409 response), that's treated as
+// success — it just means one is already being tracked, not an error.
+//
+// Called by: DashboardPage(), rendered next to the day-range toggle.
 function ReindexButton({ session }: { session: Session | null }) {
   const [status, setStatus] = useState<ReindexStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -277,9 +283,13 @@ export default function DashboardPage() {
     };
   }, [router]);
 
-  // [OPS:FE-DASH-b] metrics fetch — re-runs whenever `days` (the 7/30/90
-  // window toggle) or the session changes; waits on authChecked first when
-  // REQUIRE_AUTH is set, so it never fires with a stale/absent token.
+  // [OPS:FE-DASH-b] metrics fetch
+  //
+  // What it does: fetches the metrics for the currently selected day
+  // window and stores them in state. Re-runs automatically whenever
+  // `days` (the 7/30/90 toggle) or the session changes. When auth is
+  // required, it waits until the login check has finished first, so it
+  // never sends a request with a missing or stale token.
   useEffect(() => {
     if (REQUIRE_AUTH && !authChecked) return;
     setLoading(true);

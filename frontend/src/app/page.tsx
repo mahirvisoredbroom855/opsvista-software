@@ -52,19 +52,16 @@ import {
 } from "../lib/chatUtils";
 import { supabase } from "../lib/supabaseClient";
 
-// ═══════════════════════════════════════════════════════════════════════
-// MODULE: [OPS:FE-CHAT] — the chat UI, this app's single most important
-//          frontend file
+// ─────────────────────────────────────────────────────────────────────────
+// MODULE: [OPS:FE-CHAT]
 //
-// Types below are the hand-kept mirror of the backend's SSE event payloads
-// (chat.py's [OPS:CHAT-019] _sse_event()/[OPS:CHAT-020] chat_stream()) and
-// ChatResponse [OPS:CHAT-004] — no shared schema/codegen, so a backend
-// field rename needs a matching edit here or the UI silently drops data.
-// Salient UI pieces (department badges, real source button, similar-
-// questions) are implemented as [OPS:FE-CHAT-*] components below; the SSE
-// parsing + streaming state machine lives in sendMessage()
-// [OPS:FE-CHAT-SSE].
-// ═══════════════════════════════════════════════════════════════════════
+// What it does: the chat screen — types below are hand-written to match
+// the backend's SSE event shapes exactly. There's no shared schema
+// between frontend and backend, so if a backend field gets renamed,
+// this file has to be updated by hand or the UI silently stops showing
+// that data. The actual SSE streaming logic lives in sendMessage()
+// further down.
+// ─────────────────────────────────────────────────────────────────────────
 type Source = {
   text: string;
   score: number;
@@ -285,12 +282,14 @@ function SourceCard({ source }: { source: Source }) {
 }
 
 /**
- * [OPS:FE-CHAT-a] Always-visible department badges — previously buried
- * inside the collapsed sources <details>, meaning you had to click to
- * expand before finding out an answer was even HR- or Finance-related.
- * Department is exactly the kind of thing that should be salient at a
- * glance. Reads Source.metadata.department, set server-side by
- * [OPS:ING-001d] make_chunk_documents().
+ * [OPS:FE-CHAT-a] SourceClusters()
+ *
+ * What it does: shows a small badge for each department the sources
+ * came from ("HR · 2", "Finance · 1"), always visible above the
+ * answer — so you know at a glance what kind of documents backed this
+ * answer, without having to click to expand the source list.
+ *
+ * Called by: Page(), once per assistant message that has sources.
  */
 function SourceClusters({ sources }: { sources: Source[] }) {
   const counts = new Map<string, number>();
@@ -310,11 +309,13 @@ function SourceClusters({ sources }: { sources: Source[] }) {
 }
 
 /**
- * [OPS:FE-CHAT-b] A real clickable <button> (not a native <summary>
- * disguised as a link) that discloses the full source list + charts on
- * demand, while the department badges above it ([OPS:FE-CHAT-a]) stay
- * visible either way. useState(open) + aria-expanded is the entire
- * disclosure mechanism — no external UI library.
+ * [OPS:FE-CHAT-b] SourcesToggle()
+ *
+ * What it does: a button that expands/collapses the full list of source
+ * documents (with charts and tables) below an answer. Just local
+ * component state (open/closed) toggled on click — no external library.
+ *
+ * Called by: Page(), once per assistant message that has sources.
  */
 function SourcesToggle({
   sources,
@@ -353,13 +354,14 @@ function SourcesToggle({
 }
 
 /**
- * [OPS:FE-CHAT-c] "People are also asking" — a real cosine-similarity match
- * against previously-logged queries (see [OPS:PVEC-007]
- * find_similar_queries() in pgvector_store.py), not a placeholder number.
- * Empty means genuinely no similar prior question cleared the similarity
- * threshold ([OPS:PVEC-006] SIMILAR_QUERY_THRESHOLD) yet, so this renders
- * nothing rather than a fabricated "0 similar" line. Fed by the `meta` SSE
- * event's similar_queries field ([OPS:CHAT-020]).
+ * [OPS:FE-CHAT-c] SimilarQuestions()
+ *
+ * What it does: shows "N similar questions asked before" with the
+ * closest previous match, when the backend found real prior questions
+ * similar enough to this one. If the backend found none, this component
+ * renders nothing at all — it never shows a fake "0 similar" line.
+ *
+ * Called by: Page(), once per assistant message.
  */
 function SimilarQuestions({ items }: { items: SimilarQuery[] }) {
   if (!items || items.length === 0) return null;
@@ -411,12 +413,14 @@ function CopyButton({ text }: { text: string }) {
 }
 
 /**
- * [OPS:FE-CHAT-d] Retrieval-transparency panel: surfaces the dual-path
- * trace object [OPS:CHAT-010] retrieve_with_trace() returns — which index
- * answered, confidence, source diversity. Directly renders backend field
- * names (used_fallback, retrieval_confidence, source_diversity,
- * fallback_reason) with no server-side reshaping, so this component is
- * the most exact 1:1 mirror of a backend data shape in the whole frontend.
+ * [OPS:FE-CHAT-d] TracePanel()
+ *
+ * What it does: shows exactly which search path answered the question
+ * (the fast index, or the pgvector backup), plus confidence and source
+ * diversity percentages — the "how was this found" trace panel. Renders
+ * the backend's trace fields directly, with no reshaping.
+ *
+ * Called by: Page(), once per assistant message that has a trace object.
  */
 function TracePanel({ trace }: { trace: Trace }) {
   const confidencePct = Math.round((trace.retrieval_confidence ?? 0) * 100);
@@ -588,25 +592,23 @@ export default function Page() {
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // [OPS:FE-CHAT-SSE] sendMessage() — hand-rolled SSE client, the core
-  //                    request/streaming logic of the whole chat UI
+  // [OPS:FE-CHAT-SSE] sendMessage()
   //
-  // WHY NOT THE BROWSER'S EventSource: EventSource can't send custom
-  // request headers — no way to attach "Authorization: Bearer <token>"
-  // for [OPS:AUTH-001]. fetch() + res.body.getReader() is used instead,
-  // manually decoding UTF-8 chunks and splitting on "\n\n" (frame
-  // boundary) then "\n" (event:/data: lines) — the exact inverse of
-  // [OPS:CHAT-019] _sse_event()'s formatting on the backend.
-  // EVENT HANDLING: "meta" fills in chatId/sources/trace/similarQueries
-  // on the pending assistant message (still empty content at this
-  // point); "token" appends to content incrementally (the actual
-  // streaming effect); "error" appends a formatted error inline into
-  // the message rather than a separate UI state; "done" clears
-  // `pending` and sets the final model name. The `buffer` variable
-  // deliberately holds back an incomplete trailing frame (the last
-  // element after split("\n\n")) across read() calls, since a chunk
-  // boundary from the network has no guaranteed alignment with an SSE
-  // frame boundary.
+  // What it does: sends the question to the backend and reads the
+  // answer back as it streams in, word by word. Uses fetch() with a
+  // manual reader instead of the browser's built-in EventSource, because
+  // EventSource can't attach a login token to the request header —
+  // fetch() can. It decodes each network chunk of text, splits it on
+  // blank lines into individual SSE "frames", and reacts to each one:
+  // "meta" fills in the source list and trace info, "token" appends the
+  // next bit of answer text, "error" appends an error message inline,
+  // and "done" marks the message as finished. Because a network chunk
+  // can cut a frame in half, any incomplete trailing frame is held back
+  // in `buffer` and prepended to the next chunk instead of being parsed
+  // right away.
+  //
+  // Called by: send() (the Send button / Enter key) and the example
+  // question chips.
   // ───────────────────────────────────────────────────────────────────
   async function sendMessage(message: string) {
     if (!message.trim() || loading) return;
