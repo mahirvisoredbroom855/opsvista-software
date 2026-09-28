@@ -13,7 +13,7 @@ processing/document_processing_engine.py.
 # / build_drive_index.py: both scripts need to chunk/classify/extract
 # documents IDENTICALLY, or a document ingested locally in dev would end
 # up formatted differently than the same document ingested from Drive in
-# prod — every function below is tagged individually as [OPS:ING-001x].
+# prod — every function below is tagged individually (OPS:ING-001a..e).
 # ═══════════════════════════════════════════════════════════════════════
 from __future__ import annotations
 

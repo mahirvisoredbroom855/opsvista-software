@@ -69,7 +69,7 @@ _reindex_state: Dict[str, Any] = {
 #       PersistedInMemorySearch.ingest_documents() [OPS:IDX-004]),
 #       Supabase REST (via [OPS:PVEC-003] upsert_documents()).
 # CALLS: discover_documents() (build_drive_index.py [OPS:DRIVE-003]),
-#       backup_index_if_exists() [OPS:ING-003], PersistedInMemorySearch
+#       backup_index_if_exists() [OPS:ING-001e], PersistedInMemorySearch
 #       [OPS:IDX-003]/[OPS:IDX-004], upsert_documents() [OPS:PVEC-003].
 # WHY FULL REBUILD, NOT INCREMENTAL: the JSON index has no dedup/upsert
 #       logic on append — ingest_documents() always appends — so a

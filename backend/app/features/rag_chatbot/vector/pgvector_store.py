@@ -4,7 +4,7 @@ backend/app/features/rag_chatbot/vector/pgvector_store.py
 # ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:PVEC] — the pgvector fallback + audit-trail layer
 #
-# Every function here is independently tagged [OPS:PVEC-0NN] below. The
+# Every function here is independently tagged (OPS:PVEC-001..009) below. The
 # short version of what this module is for: a second retrieval path
 # (pgvector_search) that only fires when the primary in-memory index
 # [OPS:IDX] comes up empty or low-confidence, plus the audit-trail writes

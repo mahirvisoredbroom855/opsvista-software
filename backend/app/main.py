@@ -1,4 +1,12 @@
 # backend/app/main.py
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE: [OPS:MAIN] — app factory, lifespan startup, router wiring
+#
+# Not part of the original phased annotation plan but tagged here since
+# two other modules ([OPS:PVEC-009] hydrate_index_from_supabase(),
+# [OPS:CHAT-024] initialize_chat_system()) already referenced
+# [OPS:MAIN-002] forward — this resolves that reference.
+# ═══════════════════════════════════════════════════════════════════════
 from __future__ import annotations
 
 import json
@@ -77,6 +85,27 @@ def _cors_origins_from_env() -> list[str]:
 # -----------------------------------------------------------------------------
 # Lifespan
 # -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:MAIN-002] lifespan() — startup hook: local index present? if not,
+#                 try hydrating from Supabase before falling back to
+#                 "no index" mode
+#
+# API/CALL: [OPS:PVEC-009] hydrate_index_from_supabase() — only when
+#       _find_enhanced_index() finds nothing on local disk.
+# WHY THIS MATTERS ON RENDER: Render's free tier has ephemeral local
+#       disk — every restart/redeploy wipes enhanced_index.json even
+#       though the identical data already sits in Supabase (dual-
+#       written at ingest time by [OPS:PVEC-003] upsert_documents()).
+#       Without this hydration step, every restart would silently boot
+#       into an empty-index "fallback" state until someone manually
+#       reindexed. Verified for real this session: deleting the local
+#       index file and restarting confirmed automatic rebuild from
+#       Supabase.
+# NUANCE: does NOT call [OPS:CHAT-024] initialize_chat_system() — that
+#       function exists but nothing in the actual startup path invokes
+#       it; this function reimplements an equivalent (but not identical)
+#       check inline instead.
+# ─────────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting OpsVista application…")
@@ -133,6 +162,14 @@ async def lifespan(app: FastAPI):
 # -----------------------------------------------------------------------------
 # App factory
 # -----------------------------------------------------------------------------
+# [OPS:MAIN-003] create_app() — registers, in order: the shared rate
+# limiter [OPS:RATE-001], CORS (explicit origins + a regex allowing any
+# *.vercel.app preview deployment), routers ([OPS:CHAT], [OPS:ADMIN-002],
+# [OPS:ADMIN-001] — each import wrapped in a dual-path try/except to
+# tolerate both `uvicorn app.main:app` from backend/ and an
+# `--app-dir backend` invocation from the repo root), then a few plain
+# status/health routes. Returns the FastAPI instance; `app` below is the
+# actual ASGI entrypoint uvicorn imports.
 def create_app() -> FastAPI:
     app = FastAPI(
         title="OpsVista API",
