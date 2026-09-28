@@ -7,18 +7,15 @@ call needed. It's also home to the one function every part of the app
 uses to turn text into a fingerprint in the first place, so a question
 and a document always get compared in the same terms.
 """
-# ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:IDX] — the PRIMARY retrieval path (in-memory JSON index)
 #
-# This is what [OPS:CHAT-007] _enhanced_retrieve() searches first, before
-# any pgvector fallback [OPS:PVEC] is even considered. Two responsibilities
-# live in this one file: (1) embed_texts() — the single shared embedding
-# entrypoint reused by the primary index, the pgvector dual-write, and the
-# pgvector query path, so all three stay in the same vector space; and
-# (2) PersistedInMemorySearch — a brute-force cosine-similarity scan over
-# a JSON file loaded fully into memory (no ANN index, no database — see
-# [OPS:CHAT-006]'s note on why this is fine at current corpus size).
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: this is what chat.py searches first, before the
+# Supabase backup search is even considered. Two things live in this
+# one file — embed_texts(), the single shared function every part of
+# the app uses to turn text into a numeric fingerprint, and
+# PersistedInMemorySearch, a brute-force similarity scan over a JSON
+# file loaded fully into memory (no database, no ANN index — see the
+# comment on search() below for why that's fine at this corpus size).
 from __future__ import annotations
 import json, math, os, hashlib
 from pathlib import Path
@@ -39,21 +36,19 @@ _EMBED_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
 _MOCK_DIM = 384  # Standard embedding dimension
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:IDX-001] _cosine() / _hash_to_vector() — the math primitive and the
-#                deterministic mock-embedding fallback
+# [OPS:IDX-001] _cosine() / _hash_to_vector()
 #
-# WHAT: _cosine() is the same similarity function pgvector's `<=>` operator
-#       computes server-side [OPS:PVEC-004] — kept identical in meaning
-#       (via `1 - distance` on the Postgres side) so scores from the two
-#       retrieval paths are comparable to a human even though they're
-#       computed on different machines. _hash_to_vector() produces a
-#       deterministic (same text -> same vector, every run) but
-#       semantically meaningless embedding via repeated MD5 hashing +
-#       normalization — used only when no real API key is configured, so
-#       the whole pipeline (ingest, search, score) is exercisable without
-#       any API cost during local dev.
-# CALLED BY: [OPS:IDX-005] PersistedInMemorySearch.search() (_cosine, every
-#       query); [OPS:IDX-002] embed_texts() (_hash_to_vector, mock path only).
+# What it does: _cosine() measures how similar two lists of numbers
+# are — the same math pgvector runs server-side, kept equivalent so
+# scores from both search paths mean the same thing to a human, even
+# though they're computed on different machines. _hash_to_vector()
+# fakes an embedding by hashing the text — same input always gives the
+# same output, but it carries no real meaning. Used only when no real
+# API key is configured, so the entire pipeline (ingest, search, score)
+# can run for free during local development or tests.
+#
+# Called by: search() uses _cosine() on every query; embed_texts()
+# uses _hash_to_vector() only on the mock-embedding path.
 # ─────────────────────────────────────────────────────────────────────────
 def _cosine(a: List[float], b: List[float]) -> float:
     if np is not None:
@@ -160,36 +155,27 @@ def _embed_many_gemini_impl(texts: List[str]) -> List[List[float]]:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:IDX-002] embed_texts() — THE shared embedding entrypoint for the
-#                 entire system (the single most-imported function tagged
-#                 in this whole codebase)
+# [OPS:IDX-002] embed_texts() — the shared embedding entrypoint for the
+#                 entire system
 #
-# API/CALL: OpenAI embeddings.create() (_embed_many_openai_impl, batches
-#       of 100) OR Gemini embed_content() (_embed_many_gemini_impl,
-#       batches of 10 with 429 retry/backoff) — provider priority is
-#       OpenAI > Gemini > mock, decided by which API key env var is set.
-# KNOWN BUG (documented, not yet fixed): if BOTH OPENAI_API_KEY and
-#       GEMINI_API_KEY are set, OpenAI silently wins here — matches the
-#       identical bug in [OPS:LLM-001] LLMClient.__init__, so at least
-#       the embedding provider and the generation provider stay
-#       consistent with each other even when the bug fires.
-# WHY THIS FUNCTION MUST STAY THE SINGLE CALL SITE: [OPS:IDX-004]
-#       PersistedInMemorySearch (primary index), [OPS:PVEC-003]
-#       upsert_documents() (pgvector dual-write), and every query
-#       embedding in chat.py/pgvector_store.py all call this exact
-#       function — if any of them embedded independently with different
-#       settings, the resulting vectors would live in different spaces
-#       and cosine similarity between them would be meaningless.
-# GEMINI DIMENSION NUANCE: gemini-embedding-001 natively outputs 3072
-#       dims; output_dimensionality=1536 (Matryoshka representation
-#       learning) truncates to a smaller, still-meaningful vector — done
-#       specifically because pgvector's ivfflat/hnsw index types cap at
-#       2000 dims, so 1536 keeps a future ANN index viable even though
-#       none is active yet (see schema.sql [OPS:SCHEMA] comments).
-# CALLED BY: [OPS:CHAT-006]/[OPS:CHAT-007] (query embedding, primary
-#       path), [OPS:PVEC-003]/[OPS:PVEC-004]/[OPS:PVEC-006]/[OPS:PVEC-007]
-#       (dual-write + every pgvector query embedding), [OPS:IDX-004]
-#       ingest_texts() (bulk document embedding at index-build time).
+# What it does: turns a list of text strings into a list of numeric
+# fingerprints, using whichever provider is available — OpenAI if
+# OPENAI_API_KEY is set, else Gemini if GEMINI_API_KEY is set, else a
+# free fake fingerprint for local dev.
+#
+# Known bug (not yet fixed): if BOTH keys are set, OpenAI silently
+# wins with no warning — this deployment's real intent is to run on
+# Gemini's free tier, so a leftover test key would silently switch the
+# whole system's behavior.
+#
+# Why every embedding call in the app must go through this exact
+# function: the primary index, the Supabase dual-write, and every
+# query embedding all call this — if any of them embedded
+# independently with different settings, the resulting numbers
+# wouldn't be comparable and similarity search would return garbage.
+#
+# Called by: query embedding in chat.py, document embedding during
+# ingestion, and every embedding call in pgvector_store.py.
 # ─────────────────────────────────────────────────────────────────────────
 def embed_texts(texts: List[str], use_mock: Optional[bool] = None) -> List[List[float]]:
     """
@@ -222,23 +208,20 @@ def embed_texts(texts: List[str], use_mock: Optional[bool] = None) -> List[List[
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:IDX-003] PersistedInMemorySearch.__init__() / _load_if_exists() —
-#                 loads the entire index into a Python list on construction
+# [OPS:IDX-003] PersistedInMemorySearch.__init__() / _load_if_exists()
 #
-# WHAT: reads the whole JSON file into self.items on every construction
-#       (no lazy loading, no streaming) — fine at ~117 chunks, would need
-#       rethinking at a much larger corpus. Handles TWO index file
-#       formats: the current "enhanced_index.json" shape
-#       ({"embedding_dim", "documents", "embeddings", "metadata"}, one
-#       parallel array per field) and a legacy shape ({"dim", "items"},
-#       already the {id, text, metadata, vector} shape this class uses
-#       internally) — both get normalized into self.items either way.
-# NUANCE: this constructor is called FRESH on every single retrieval
-#       request via [OPS:CHAT-006] _get_enhanced_index() — there is no
-#       persistent singleton/cache across requests, so index freshness
-#       after a reindex is immediate (no stale-cache invalidation logic
-#       needed) at the cost of re-reading the file every time.
-# CALLED BY: [OPS:CHAT-006] _get_enhanced_index(), once per chat request.
+# What it does: reads the whole index JSON file into memory the moment
+# this class is constructed — no lazy loading. It understands two file
+# formats: the current one (parallel arrays of documents/embeddings/
+# metadata) and an older one ({"dim","items"}), and normalizes both
+# into the same internal list either way.
+#
+# Built fresh on every single chat request (see _get_enhanced_index()
+# in chat.py) — nothing is cached between requests. That means a
+# reindex takes effect immediately, at the cost of re-reading the file
+# every time.
+#
+# Called by: _get_enhanced_index() in chat.py, once per chat request.
 # ─────────────────────────────────────────────────────────────────────────
 class PersistedInMemorySearch:
     """
@@ -322,18 +305,16 @@ class PersistedInMemorySearch:
     # ---------------- public API ----------------
 
     # ─────────────────────────────────────────────────────────────────
-    # [OPS:IDX-004] ingest_texts() / ingest_documents() — bulk embed +
-    #                 append + persist to disk
+    # [OPS:IDX-004] ingest_texts() / ingest_documents()
     #
-    # WHAT: embeds ALL texts in one embed_texts() call (batched provider-
-    #       side, see [OPS:IDX-002]), appends every resulting item to
-    #       self.items, then writes the WHOLE index back to disk — not
-    #       an incremental/streaming append, so calling this repeatedly
-    #       on a large corpus re-serializes the growing file each time.
-    # CALLED BY: build_local_index.py [OPS:ING-002], build_drive_index.py
-    #       [OPS:DRIVE-003] — the actual index-build entrypoints; this
-    #       class's search-time construction [OPS:IDX-003] never calls
-    #       ingest_* itself, only reads what's already on disk.
+    # What it does: embeds every text in one batch call, appends each
+    # result to the in-memory list, then writes the whole index back
+    # to disk as one file. Not an incremental append — calling this
+    # repeatedly re-writes the growing file each time.
+    #
+    # Called by: build_local_index.py and build_drive_index.py, the
+    # actual index-build scripts. Never called during a normal search
+    # request — search-time construction only reads what's on disk.
     # ─────────────────────────────────────────────────────────────────
     def ingest_texts(self, texts: List[str], metadatas: Optional[List[Dict[str, Any]]] = None, ids: Optional[List[str]] = None):
         metadatas = metadatas or [{} for _ in texts]
@@ -352,23 +333,20 @@ class PersistedInMemorySearch:
         self.ingest_texts(texts, metas, ids)
 
     # ─────────────────────────────────────────────────────────────────
-    # [OPS:IDX-005] search() — the actual primary-path retrieval:
-    #                 brute-force cosine similarity, no ANN index
+    # [OPS:IDX-005] search() — brute-force similarity, no ANN index
     #
-    # WHAT: embeds the query once, then computes _cosine() [OPS:IDX-001]
-    #       against EVERY item in self.items (a full O(n) linear scan —
-    #       there is no ivfflat/hnsw-equivalent structure here; "index"
-    #       in this class's name means "persisted to disk," not "search
-    #       index data structure"), sorts descending, slices top_k.
-    # WHY THIS IS FINE TODAY: ~117 chunks means the whole scan is
-    #       microseconds — the real cost per request is the single
-    #       embedding API call, not the similarity math. Would need
-    #       revisiting (numpy vectorized batch dot-product at minimum,
-    #       or a real ANN structure) at a meaningfully larger corpus.
-    # RETURNS: [{text, score, metadata}] sorted best-first — this exact
-    #       ordering is what makes [OPS:CHAT-014]'s greedy token-budget
-    #       truncation correct (it assumes best-to-worst order already).
-    # CALLED BY: [OPS:CHAT-007] _enhanced_retrieve(), once per request.
+    # What it does: embeds the question once, then compares it against
+    # every single stored chunk with plain cosine similarity — a full
+    # scan, not a real search-index data structure. "Index" in this
+    # class's name means "persisted to disk," not "fast lookup
+    # structure." Sorts the results best-first and returns the top few.
+    #
+    # Why this is fine today: at ~117 chunks the scan takes
+    # microseconds — the real cost per request is the one embedding
+    # API call, not the comparison math. Would need a real search
+    # structure at a much larger document count.
+    #
+    # Called by: _enhanced_retrieve() in chat.py, once per request.
     # ─────────────────────────────────────────────────────────────────
     def search(self, query: str, top_k: int = 4) -> List[Dict[str, Any]]:
         if not self.items:
@@ -385,9 +363,9 @@ class PersistedInMemorySearch:
         scored.sort(key=lambda x: x["score"], reverse=True)
         return scored[:max(1, top_k)]
 
-    # [OPS:IDX-006] get_stats() — index introspection, used by
-    # [OPS:CHAT-023]-adjacent admin/status surfaces to report corpus size,
-    # dimension, and whether mock embeddings are currently active.
+    # [OPS:IDX-006] get_stats() — reports corpus size, embedding
+    # dimension, and whether mock embeddings are active, for status
+    # and admin surfaces.
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the indexed documents."""
         return {
