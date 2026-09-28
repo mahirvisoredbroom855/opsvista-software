@@ -40,22 +40,24 @@ DROP TABLE IF EXISTS dim_document CASCADE;
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto; -- for gen_random_uuid()
 
--- ═══════════════════════════════════════════════════════════════════════
--- MODULE: [OPS:SCHEMA] — the pgvector fallback + audit-trail schema
+-- ─────────────────────────────────────────────────────────────────────────
+-- MODULE: [OPS:SCHEMA]
 --
--- Written to by [OPS:PVEC-003] upsert_documents() (dim_document/fact_chunk/
--- fact_embedding), [OPS:PVEC-005] log_query() (fact_query/
--- bridge_query_citation), [OPS:PVEC-006] upsert_query_embedding()
--- (fact_query_embedding). Read by [OPS:PVEC-004] pgvector_search() (via
--- match_chunks() [OPS:SCHEMA-003]) and [OPS:PVEC-007] find_similar_queries()
--- (via match_queries() [OPS:SCHEMA-004]).
--- ═══════════════════════════════════════════════════════════════════════
+-- What it does: the backup search database plus a full audit trail —
+-- documents, their chunks, each chunk's numeric fingerprint, and a log
+-- of every question ever asked (for the dashboard). Written to by
+-- pgvector_store.py's upsert/log functions; read by the backup search
+-- and the similar-questions feature.
+-- ─────────────────────────────────────────────────────────────────────────
 
 -- ---------------------------------------------------------------------------
--- [OPS:SCHEMA-001] dim_document — one row per source document (Drive file or
--- local seed_docs file), keyed by (source_type, source_path) — the same
--- identity key [OPS:PVEC-002] _document_source_path() computes in Python, so
--- the two must always agree or upserts/citations silently fail to match.
+-- [OPS:SCHEMA-001] dim_document
+--
+-- What it does: one row per source document (a Google Drive file, or a
+-- local test file), identified by its source type plus its path. This
+-- identity key must match exactly what the Python ingestion code
+-- computes for the same document, or the same document would get
+-- treated as a new one on every reindex instead of being updated.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS dim_document (
     document_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -71,12 +73,13 @@ CREATE TABLE IF NOT EXISTS dim_document (
 );
 
 -- ---------------------------------------------------------------------------
--- [OPS:SCHEMA-002] fact_chunk — one row per retrieval-granularity chunk,
--- matching exactly what the enhanced_index.json ingestion pipeline
--- ([OPS:ING-001d] make_chunk_documents()) already produces. `ordinal` is the
--- same value as the Python-side chunk_index metadata field — the
--- (document_id, ordinal) unique constraint is pgvector_store.py's upsert
--- conflict key [OPS:PVEC-003].
+-- [OPS:SCHEMA-002] fact_chunk
+--
+-- What it does: one row per searchable chunk of text — the exact same
+-- chunks the local JSON index stores. `ordinal` records each chunk's
+-- position within its document, and the (document_id, ordinal) pair
+-- together is what upsert_documents() uses to detect "this is the same
+-- chunk as before, update it" instead of creating a duplicate.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_chunk (
     chunk_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -89,13 +92,14 @@ CREATE TABLE IF NOT EXISTS fact_chunk (
 );
 
 -- ---------------------------------------------------------------------------
--- [OPS:SCHEMA-002b] fact_embedding — the actual pgvector fallback store.
--- Spec note: "vectors reside in enhanced_index.json or pgvector" — here they
--- reside in BOTH, written by the same ingestion pass (dual-write via
--- [OPS:PVEC-003] upsert_documents()), so the fallback path has real, current
--- data rather than a hollow adapter. VECTOR(1536), not Gemini's native 3072
--- — see the file header comment for why (Matryoshka truncation, pgvector's
--- ivfflat/hnsw 2000-dim cap).
+-- [OPS:SCHEMA-002b] fact_embedding
+--
+-- What it does: stores each chunk's numeric fingerprint — the actual
+-- data the backup search compares against. It's written at the same
+-- time as the local JSON index, by the same ingestion step, so both
+-- copies always stay in sync. The vector is 1536 numbers wide, not
+-- Gemini's native 3072, because it's shrunk to fit under pgvector's own
+-- 2000-dimension index limit (see the file header note).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_embedding (
     chunk_id       UUID PRIMARY KEY REFERENCES fact_chunk(chunk_id) ON DELETE CASCADE,
@@ -105,17 +109,16 @@ CREATE TABLE IF NOT EXISTS fact_embedding (
     generated_at   TIMESTAMPTZ DEFAULT now()
 );
 
--- [OPS:SCHEMA-002c] No ANN index yet, deliberately — confirmed live: every
--- pgvector similarity search today (match_chunks/match_queries) is an exact
--- sequential scan, not an ivfflat/hnsw-indexed approximate search. pgvector's
--- guidance is roughly
--- `lists = rows / 1000` for ivfflat — with a few hundred rows in this
--- corpus, that rounds to ~0-1 lists, meaning an index here would make
--- search *worse* (each cluster ends up with ~1 vector, badly approximating
--- true nearest neighbors) while adding no speed benefit at this scale.
--- Exact search (a plain sequential scan) is both more accurate and fast
--- enough below roughly 1000-10,000 rows. Add this back once the corpus is
--- large enough to need it:
+-- [OPS:SCHEMA-002c] No search index on this column, deliberately
+--
+-- What this means: every backup search today checks every single row
+-- one by one (a plain sequential scan), rather than using a fast
+-- approximate search index. That's intentional — with only a few
+-- hundred rows in this corpus, adding an approximate-search index would
+-- actually make results WORSE (too few rows per cluster to approximate
+-- well) while gaining no real speed. A plain scan is both more accurate
+-- and fast enough below roughly 1,000-10,000 rows. Add an index back
+-- once the corpus grows past that:
 --
 --   CREATE INDEX idx_fact_embedding_vector ON fact_embedding
 --       USING ivfflat (embedding vector_cosine_ops)
@@ -125,11 +128,13 @@ CREATE TABLE IF NOT EXISTS fact_embedding (
 -- to build: `USING hnsw (embedding vector_cosine_ops)`).
 
 -- ---------------------------------------------------------------------------
--- [OPS:SCHEMA-003b] fact_query — query audit log (operational transparency /
--- compliance, per spec section 8 "Operational Monitoring" and 14 "Privacy
--- Policy & Data Compliance"). Written by [OPS:PVEC-005] log_query() on every
--- chat request; user_rating written separately by [OPS:PVEC-008]
--- set_feedback() when the user clicks thumbs up/down.
+-- [OPS:SCHEMA-003b] fact_query
+--
+-- What it does: one row logged for every single chat question asked —
+-- the question text, how long it took, whether the backup search ran,
+-- and the token counts. Written automatically on every chat request;
+-- user_rating gets filled in separately, later, when someone clicks
+-- thumbs up or down on the answer.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_query (
     query_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -147,13 +152,12 @@ CREATE TABLE IF NOT EXISTS fact_query (
 );
 
 -- ---------------------------------------------------------------------------
--- [OPS:SCHEMA-003c] fact_query_embedding — powers the "similar questions
--- others are asking" UI feature. Same pattern as fact_embedding/
--- match_chunks (dual-path retrieval), applied to past *queries* instead of
--- document chunks: every answered query gets embedded and stored here
--- (via [OPS:PVEC-006] upsert_query_embedding()), so a new question can be
--- compared against real prior questions via cosine similarity rather than
--- a fake/static number. Read by match_queries() [OPS:SCHEMA-004].
+-- [OPS:SCHEMA-003c] fact_query_embedding
+--
+-- What it does: stores a numeric fingerprint of every past question
+-- that's been asked, so a new question can be compared against real
+-- prior ones and show "N similar questions asked before" — a genuine
+-- comparison, not a fake or hardcoded number.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_query_embedding (
     query_id      UUID PRIMARY KEY REFERENCES fact_query(query_id) ON DELETE CASCADE,
@@ -161,12 +165,12 @@ CREATE TABLE IF NOT EXISTS fact_query_embedding (
     generated_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- [OPS:SCHEMA-004b] bridge_query_citation — one row per source cited in an
--- answer (rank-ordered). Written by [OPS:PVEC-005] log_query(), which
--- re-derives document_id/chunk_id via the same lookup keys
--- [OPS:PVEC-003] upsert_documents() wrote them under. Read by
--- [OPS:ADMIN-002a] GET /metrics for the top-documents/top-departments
--- aggregation.
+-- [OPS:SCHEMA-004b] bridge_query_citation
+--
+-- What it does: one row per source document actually cited in an
+-- answer, in the order they were ranked. This is what the "most-cited
+-- documents" and "most-cited departments" numbers on the dashboard are
+-- computed from.
 CREATE TABLE IF NOT EXISTS bridge_query_citation (
     query_id         UUID REFERENCES fact_query(query_id) ON DELETE CASCADE,
     document_id      UUID REFERENCES dim_document(document_id),
@@ -177,20 +181,17 @@ CREATE TABLE IF NOT EXISTS bridge_query_citation (
 );
 
 -- ---------------------------------------------------------------------------
--- [OPS:SCHEMA-003] match_chunks() — the actual pgvector fallback query.
--- supabase-py's REST interface can't express the `<=>` distance operator
--- directly, so it's exposed as a Postgres function and called via
--- .rpc("match_chunks", {...}) from [OPS:PVEC-004] pgvector_search().
+-- [OPS:SCHEMA-003] match_chunks()
 --
--- query_embedding is accepted as TEXT (a JSON-array string like
--- "[0.01,-0.02,...]") rather than VECTOR directly — PostgREST's JSON->vector
--- coercion over RPC is unreliable, whereas text->vector casting (see the
--- `::vector` cast in the SELECT below) is pgvector's documented,
--- guaranteed-stable input path. `1 - (embedding <=> query_embedding)`
--- converts cosine DISTANCE (0=identical) into cosine SIMILARITY
--- (1=identical) — the same convention [OPS:IDX-001] _cosine() returns on
--- the primary-index side, so scores from both retrieval paths read the
--- same way to a human even though they're computed on different machines.
+-- What it does: the actual backup search query — given a question's
+-- numeric fingerprint, finds the closest-matching chunks. It's written
+-- as a database function (not a plain query) because Supabase's normal
+-- API can't express the "how similar are these two vectors" comparison
+-- directly. The embedding is passed in as a text string, not a native
+-- vector type, because that conversion path is the one pgvector
+-- guarantees will always work reliably. The math flips "distance"
+-- (0 = identical) into "similarity" (1 = identical), so scores read the
+-- same way as the primary index's own similarity scores.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION match_chunks(
     query_embedding TEXT,
@@ -228,17 +229,15 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- [OPS:SCHEMA-004] match_queries() — finds prior questions similar to a new
--- one, via the same text->vector RPC pattern as match_chunks()
--- [OPS:SCHEMA-003] (see its comment for why TEXT, not VECTOR, is the
--- parameter type). Called via .rpc("match_queries", {...}) from
--- [OPS:PVEC-007] find_similar_queries(). exclude_query_id lets a caller
--- keep the current in-flight query out of its own "similar questions"
--- result — though in practice this is somewhat redundant with the ordering
--- guarantee in [OPS:PVEC-006]: the current query's own embedding isn't
--- written to fact_query_embedding until AFTER its similar-queries lookup
--- already ran, so it usually can't match itself anyway; exclude_query_id is
--- the explicit belt-and-suspenders guard for that ordering.
+-- [OPS:SCHEMA-004] match_queries()
+--
+-- What it does: same idea as match_chunks(), but searches past
+-- questions instead of document chunks — this is what powers "similar
+-- questions asked before". exclude_query_id lets the caller make sure
+-- the current in-flight question can't match itself in its own results
+-- (a safety guard — in practice the current question's own fingerprint
+-- isn't even saved yet when this runs, so it usually couldn't match
+-- itself anyway).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION match_queries(
     query_embedding TEXT,
@@ -268,23 +267,16 @@ $$;
 -- ---------------------------------------------------------------------------
 -- [OPS:SCHEMA-005] Row Level Security
 --
--- Enforced at the DATABASE level, not just in application code — this is
--- what [OPS:AUTH-002] verify_supabase_token()'s anon-key client actually
--- relies on: an anon-key client making a direct table read is still
--- restricted by these policies even if the backend's own auth check were
--- ever bypassed. All backend writes (ingestion, audit logging) instead use
--- the service-role client ([OPS:PVEC-001] _get_service_client()), which
--- bypasses RLS entirely by Supabase design — that's WHY there are no
--- INSERT/UPDATE/DELETE policies defined below: they'd be dead code, since
--- the only writer never goes through the policy-checked path.
---
--- Reasoning: the knowledge corpus tables (dim_document/fact_chunk/
--- fact_embedding) are read-only internal reference data — any authenticated
--- user may read them for retrieval, but only the ingestion pipeline (using
--- the service_role key, which bypasses RLS entirely by Supabase design) may
--- write to them. The audit tables (fact_query/bridge_query_citation) are
--- per-user: once real Supabase auth is wired up, a user should only ever
--- see their own query history, never anyone else's.
+-- What it does: these rules are enforced by the database itself, not
+-- just by the backend's code — so even a direct table read using only
+-- the public anon key stays restricted, even if the backend's own login
+-- check were somehow bypassed. Any logged-in user can read the
+-- knowledge-base tables (documents, chunks, embeddings), but only the
+-- ingestion scripts can write to them, using a separate secret key that
+-- skips these rules entirely by Supabase's design. A user can only ever
+-- read their OWN past questions, never anyone else's. There are no
+-- write rules defined below on purpose — since only that secret-key
+-- writer ever writes, and it always skips these rules anyway.
 -- ---------------------------------------------------------------------------
 ALTER TABLE dim_document ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fact_chunk ENABLE ROW LEVEL SECURITY;

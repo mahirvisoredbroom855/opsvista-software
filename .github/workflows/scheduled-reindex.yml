@@ -6,20 +6,16 @@ name: Scheduled Reindex
 # secret key instead of a human login, since nobody's around at 3am to
 # click a button.
 #
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:CI-001] — the daily automated reindex trigger
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:CI-001]
 #
-# Keeps the knowledge base current without anyone remembering to click a
-# button. discover_documents() ([OPS:ING-002a], backend/build_drive_index.py)
-# does a full Drive rescan each run — no incremental diffing — so a nightly
-# cadence is a deliberate cost/freshness tradeoff, not a limitation of this
-# workflow. Trigger a run manually anytime from the Actions tab
-# (workflow_dispatch) if you need fresher data sooner than the schedule.
-# Calls [OPS:ADMIN-001b]/[OPS:ADMIN-001c] over HTTP, authenticated via the
-# X-Automation-Token header path in [OPS:AUTH-005]
-# require_roles_or_automation_token() — this is the one real caller that
-# needs that headless-auth escape hatch to exist at all.
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: calls the backend's reindex endpoint once a day, using a
+# secret token instead of a human login. Every run does a full rescan of
+# Google Drive from scratch, not an incremental update — running nightly
+# is a deliberate tradeoff between freshness and cost, not a limitation.
+# Can also be triggered manually anytime from the Actions tab if fresher
+# data is needed sooner.
+# ─────────────────────────────────────────────────────────────────────────
 on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC daily
@@ -29,10 +25,10 @@ jobs:
   reindex:
     runs-on: ubuntu-latest
     steps:
-      # [OPS:CI-001a] POST /api/rag/admin/reindex [OPS:ADMIN-001b]. A 200
-      # (started) or 409 (already running — treated as success, matches the
-      # dashboard's ReindexButton [OPS:FE-DASH-a] behavior) are both fine;
-      # anything else fails the job.
+      # [OPS:CI-001a] What it does: sends the POST request that starts a
+      # reindex. A 200 (started) or a 409 (one's already running — treated
+      # as success, same as the dashboard button's behavior) both count as
+      # fine; anything else fails this job.
       - name: Trigger reindex
         id: trigger
         run: |
@@ -45,11 +41,10 @@ jobs:
             exit 1
           fi
 
-      # [OPS:CI-001b] polls GET /reindex/status [OPS:ADMIN-001c] every 15s,
-      # up to 60 times (15 min ceiling) — same status endpoint the
-      # dashboard's ReindexButton [OPS:FE-DASH-a] polls, just with a fixed
-      # interval here instead of self-rescheduling JS. Job fails (exit 1)
-      # if the final status isn't "completed" when polling stops.
+      # [OPS:CI-001b] What it does: checks the reindex status every 15
+      # seconds, up to 60 times (a 15-minute ceiling), and stops early once
+      # the status becomes "completed" or "failed". The whole job fails if
+      # it's not "completed" once polling stops.
       - name: Poll until the background reindex finishes
         run: |
           status="running"
