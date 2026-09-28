@@ -1,6 +1,10 @@
 # backend/app/core/supabase_jwt.py
 """
-Access-token verification for Supabase Auth.
+This file answers one question: is the login token a request carries
+actually real? Rather than checking the token's signature itself (a
+"JWT" is just a signed, tamper-proof login pass), it asks Supabase's
+own servers to confirm it — slightly slower, but correct no matter how
+a given Supabase project happens to sign its tokens.
 
 Deliberately does NOT hand-roll JWT signature verification (the previous
 version decoded HS256 tokens against SUPABASE_JWT_SECRET locally, and would

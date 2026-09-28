@@ -1,3 +1,11 @@
+"""
+This file decides who's allowed to do what. Before any admin page or
+admin action runs, one of the functions here checks: is there a valid
+login token, and does that person's account have the right role
+(Owner or Admin)? There's also a side door for the nightly automatic
+reindex job, which has no human logging in, so it proves itself with a
+secret key instead of a login.
+"""
 from __future__ import annotations
 
 import os

@@ -1,5 +1,10 @@
 # backend/app/core/rate_limit.py
 """
+This file caps how many requests any one visitor can make per minute,
+so one person (or a bug, or an attacker) can't hammer the API and slow
+it down for everyone else. Chat, feedback, and admin routes each set
+their own limit using the shared tool defined here.
+
 Shared rate limiter instance. Defined in its own module (rather than inline
 in main.py) so route files (chat.py, admin_metrics.py, discovery.py) can
 import and apply @limiter.limit(...) decorators without a circular import

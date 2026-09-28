@@ -1,3 +1,12 @@
+"""
+This file is OpsVista's first, fastest place to look for an answer.
+It keeps every document chunk and its numeric "fingerprint"
+(embedding) in one file on disk, loads it into memory, and compares
+a new question against every chunk directly — no external database
+call needed. It's also home to the one function every part of the app
+uses to turn text into a fingerprint in the first place, so a question
+and a document always get compared in the same terms.
+"""
 # ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:IDX] — the PRIMARY retrieval path (in-memory JSON index)
 #

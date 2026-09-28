@@ -1,4 +1,18 @@
 # backend/app/features/rag_chatbot/api/chat.py
+"""
+This file handles every question asked in the OpsVista chat. When
+someone types a question and hits Send, the code here (reachable at
+/api/rag/chat/complete for a one-shot reply, or /api/rag/chat/stream
+for the live "typing" version) finds the right snippets of company
+documents to answer from — trying a fast built-in search first, and
+only checking a slower backup search if the fast one isn't confident
+— sends those snippets to the AI to write an answer, sends that answer
+back to the browser (word by word, for the streaming version — a
+technique called "Server-Sent Events," which just means the server
+keeps pushing small updates over one open connection), and then saves
+a record of what happened so the observability dashboard has data to
+show later.
+"""
 #
 # ═══════════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:CHAT] — the core request path

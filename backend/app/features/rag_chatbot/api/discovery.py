@@ -1,5 +1,12 @@
 # backend/app/features/rag_chatbot/api/discovery.py
 """
+This file is what re-reads every document in Google Drive and rebuilds
+OpsVista's entire search index from scratch — triggered either by an
+Owner/Admin clicking "Reindex now" on the dashboard, or automatically
+every night by a scheduled job. It runs in the background, since
+scanning and re-processing every document can take a few minutes, and
+a separate status check lets the dashboard show progress while it works.
+
 Admin-triggered reindex API.
 
 Replaces prior scaffolding that referenced a `rag_system.document_inventory`

@@ -1,4 +1,15 @@
 # backend/app/main.py
+"""
+This is the file that starts the whole backend. When the server boots,
+this is what runs first: it checks whether the search index already
+exists on disk, and if not, rebuilds it from the Supabase database so
+the app never starts up empty-handed. It then assembles the actual web
+server — wiring up who's allowed to call it from a browser (CORS),
+how many requests per minute each visitor gets (rate limiting), and
+which URL paths lead to which feature (the chat, admin, and status
+routes). Nothing in the app is reachable over the internet until this
+file has run.
+"""
 # ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:MAIN] — app factory, lifespan startup, router wiring
 #

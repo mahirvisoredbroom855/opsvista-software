@@ -1,3 +1,11 @@
+"""
+This file is the only place in the backend that talks to Google Drive.
+It logs in using a service account (a robot account, not a human
+login), and can list and download files from the shared department
+folders — read-only, it can never change or delete anything in Drive.
+Used whenever the search index gets rebuilt from real company
+documents.
+"""
 # ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:DRIVE] — Google Drive API integration
 #

@@ -1,4 +1,9 @@
 """
+This is the "try OpsVista without any setup" script — it builds the
+search index from sample documents sitting in a local folder instead
+of real Google Drive, so a new developer can get the whole app running
+end to end without a Google service account or even an API key.
+
 backend/build_local_index.py
 
 Build enhanced_index.json from a local folder tree, without touching Google

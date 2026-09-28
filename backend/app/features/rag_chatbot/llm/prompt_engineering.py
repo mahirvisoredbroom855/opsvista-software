@@ -1,8 +1,11 @@
 # backend/app/features/rag_chatbot/llm/prompt_engineering.py
 """
-Simplified prompt engineering for immediate functionality.
-This provides the basic functions needed by chat.py without complex dependencies.
-Enhanced to adapt response length/structure based on the query.
+This file writes the actual instructions sent to the AI — company
+context, tone rules, and how long/detailed the answer should be based
+on what kind of question was asked (a quick lookup gets a short
+answer, an analytical question gets a longer, structured one). It also
+folds in the retrieved document snippets so the AI has real material
+to answer from, instead of just guessing.
 """
 # ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:LLM-004] — prompt assembly (system prompt + context

@@ -1,4 +1,11 @@
 """
+Run this script by hand (or let the nightly job/dashboard button
+trigger it) to rebuild OpsVista's entire search index from the real
+company documents living in Google Drive. It downloads every file,
+extracts the text, chunks it, turns each chunk into a numeric
+fingerprint, and saves the result — both to a local file and to the
+Supabase database.
+
 backend/build_drive_index.py
 
 Build enhanced_index.json from real Google Drive folders, using a service

@@ -1,4 +1,11 @@
 """
+This file is OpsVista's second, backup place to search for an answer —
+a copy of the same document data, but stored in the Supabase database
+instead of a local file. It only gets used when the fast local search
+isn't confident enough. This file also writes the permanent record of
+every question ever asked (for the dashboard), and stores thumbs
+up/down feedback.
+
 backend/app/features/rag_chatbot/vector/pgvector_store.py
 
 # ═══════════════════════════════════════════════════════════════════════

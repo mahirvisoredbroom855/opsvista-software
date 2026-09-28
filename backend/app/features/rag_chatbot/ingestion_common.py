@@ -1,4 +1,10 @@
 """
+This file has the shared steps for turning a raw file — a PDF, Word
+doc, or Excel sheet — into small, searchable pieces of text. Both ways
+of building the search index (from a local test folder, or from real
+Google Drive) use these exact same steps, so a document is chunked and
+labeled the same way no matter where it came from.
+
 Shared helpers used by build_local_index.py and build_drive_index.py so both
 ingestion paths (local folder / real Google Drive) chunk and classify
 documents identically. Deliberately simple — this is a fast, robust bring-up

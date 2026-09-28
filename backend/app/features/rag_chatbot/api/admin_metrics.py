@@ -1,5 +1,12 @@
 # backend/app/features/rag_chatbot/api/admin_metrics.py
 """
+This file answers "how is the chatbot actually doing?" — it's the one
+endpoint behind the whole observability dashboard. It reads the
+records every past chat question already left behind (how long it
+took, whether the backup search had to kick in, which documents got
+cited) and adds them up into totals, charts, and a recent-activity
+list. Only an Owner or Admin can see this.
+
 Observability/metrics API backing the logging dashboard. Reads from the
 fact_query / bridge_query_citation / dim_document / fact_chunk tables
 written by pgvector_store.py's dual-write + audit-logging paths.

@@ -1,4 +1,12 @@
 # backend/app/features/rag_chatbot/llm/llm_client.py
+"""
+This file is the only place in the backend that actually talks to an
+AI model to write an answer. It supports two different providers —
+Google Gemini and OpenAI — behind one shared interface, so the rest of
+the app never has to know or care which one is actually configured.
+Whichever API key is set in the environment decides which provider
+runs.
+"""
 # ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:LLM] — the generation layer (as opposed to [OPS:IDX]/
 #          [OPS:PVEC], which are retrieval/embedding)

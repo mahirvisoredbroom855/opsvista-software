@@ -1,6 +1,14 @@
 # backend/app/core/config.py
 """
-Application Configuration Settings
+This file turns environment variables (plain text values set outside
+the code, like GEMINI_API_KEY or PORT) into one typed, validated Python
+object that the rest of the app imports as `settings`. Without this,
+every file would read raw strings from the environment itself, with no
+guarantee a number is really a number or that a required value was set
+at all. Every setting the app needs — server port, Supabase keys,
+Google Drive folder mappings, rate limits, feature flags — lives here,
+with sensible defaults so the app can still boot in a bare-bones dev
+setup before every value is filled in.
 """
 
 import os
