@@ -11,16 +11,16 @@ documents identically. Deliberately simple — this is a fast, robust bring-up
 path, not the speculative business-intelligence pipeline in
 processing/document_processing_engine.py.
 """
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:ING-001] — shared ingestion helpers (department mapping,
-#          chunking, extraction, document-dict construction, backups)
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:ING-001]
 #
-# The point of this module existing separately from build_local_index.py
-# / build_drive_index.py: both scripts need to chunk/classify/extract
-# documents IDENTICALLY, or a document ingested locally in dev would end
-# up formatted differently than the same document ingested from Drive in
-# prod — every function below is tagged individually (OPS:ING-001a..e).
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: shared helper functions for turning a document into
+# search-ready pieces — deciding its department, splitting it into
+# chunks, extracting text from each file format, building the final
+# document dict, and backing up the index before a rebuild. Exists
+# separately so both ingestion scripts (local test folder, real Google
+# Drive) process documents identically.
+# ─────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import io
@@ -30,15 +30,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-# [OPS:ING-001a] FOLDER_DEPARTMENT_MAP / department_for_folder() —
-# the folder-name -> department classification table. USED BY:
-# [OPS:DRIVE-003] find_finance_folder() callers (build_drive_index.py's
-# discover_documents()) and build_local_index.py's discover_documents(),
-# via department_for_folder() — a simple substring "in" match, so a
-# folder like "Md. Mizanur Rahman (PTIL)" matches the "Md. Mizanur
-# Rahman (PTIL)" key even with Drive's exact display name.
-# owner folder name (as it appears in Drive / local seed_docs) -> department,
-# matching discovery/scanner.py's folder_department_map.
+# [OPS:ING-001a] FOLDER_DEPARTMENT_MAP / department_for_folder()
+#
+# What it does: a fixed lookup table mapping each person's Drive folder
+# name to the department they belong to. department_for_folder() checks
+# whether a folder name CONTAINS one of these keys, so it still matches
+# even if the real Drive folder name has extra text added, like "(PTIL)".
+#
+# Called by: build_drive_index.py's and build_local_index.py's
+# discover_documents(), once per document being ingested.
 FOLDER_DEPARTMENT_MAP = {
     "Riaz Uddin Sarker": "Admin",
     "Md. Mizanur Rahman (PTIL)": "Finance",
@@ -59,21 +59,18 @@ def department_for_folder(folder_name: str) -> str:
 
 # ─────────────────────────────────────────────────────────────────────────
 # [OPS:ING-001b] chunk_text() / extract_text_from_*() / extract_text_from_file()
-#                 — paragraph-aware chunking + per-format text extraction
 #
-# WHAT: chunk_text() packs whole paragraphs into ~900-char windows
-#       (never splitting mid-paragraph) rather than a fixed-length
-#       sliding window — keeps each chunk semantically coherent, which
-#       matters for retrieval quality (a chunk cut mid-sentence embeds
-#       worse). extract_text_from_file() dispatches by extension to the
-#       format-specific extractor (pypdf for PDF, python-docx for DOCX
-#       — including table cells, pandas for XLSX). extract_text_from_
-#       xlsx_bytes() flattens sheets to prose; contrast with
-#       [OPS:ING-001c] extract_table_chunks_from_xlsx_bytes() which
-#       preserves structure instead.
-# CALLED BY: make_chunk_documents() [OPS:ING-001d] (chunk_text);
-#       build_local_index.py / build_drive_index.py's discover_
-#       documents() (extract_text_from_file, directly).
+# What it does: chunk_text() splits a long document into ~900-character
+# pieces, but only at paragraph breaks — never in the middle of a
+# paragraph, since a chunk that's cut mid-sentence produces a worse
+# embedding. extract_text_from_file() looks at the file's extension and
+# picks the right extraction method (PDF, DOCX, XLSX, or plain text).
+# extract_text_from_xlsx_bytes() turns each spreadsheet into plain
+# prose text — see extract_table_chunks_from_xlsx_bytes() below for the
+# version that keeps the actual row/column structure instead.
+#
+# Called by: extract_text_from_file() is called directly by both
+# ingestion scripts; chunk_text() is called by make_chunk_documents().
 # ─────────────────────────────────────────────────────────────────────────
 def chunk_text(text: str, max_chars: int = 900) -> List[str]:
     """Paragraph-aware chunking: pack paragraphs into ~max_chars windows."""
@@ -144,19 +141,18 @@ def extract_text_from_xlsx_bytes(raw: bytes, rows_per_group: int = 12) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:ING-001c] extract_table_chunks_from_xlsx_bytes() — the
-#                 structure-preserving Excel extractor
+# [OPS:ING-001c] extract_table_chunks_from_xlsx_bytes()
 #
-# WHY THIS EXISTS SEPARATELY FROM extract_text_from_xlsx_bytes(): that
-#       function flattens everything to a text blob for embedding/RAG
-#       retrieval, losing the actual row/column boundaries. This
-#       function returns each row-group as {"text", "table": {"sheet",
-#       "columns", "rows"}} instead — the "table" field is what lets the
-#       frontend later render a real HTML table or Excel-style chart
-#       from a cited chunk, not just quote it as prose.
-# CALLED BY: build_local_index.py / build_drive_index.py's discover_
-#       documents(), for any .xlsx/.xlsm file — feeds directly into
-#       [OPS:ING-001d] make_table_chunk_documents().
+# What it does: same idea as extract_text_from_xlsx_bytes(), but instead
+# of flattening everything to plain text, it keeps each row-group as
+# real structured data ({"text", "table": {sheet, columns, rows}}). The
+# "table" part is what lets the frontend later draw an actual HTML table
+# or chart from a cited chunk, instead of just quoting it as a wall of
+# text.
+#
+# Called by: build_local_index.py / build_drive_index.py's
+# discover_documents(), for any Excel file — feeds directly into
+# make_table_chunk_documents().
 # ─────────────────────────────────────────────────────────────────────────
 def extract_table_chunks_from_xlsx_bytes(raw: bytes, rows_per_group: int = 12) -> List[Dict[str, Any]]:
     """
@@ -215,20 +211,19 @@ def extract_text_from_file(file_bytes: bytes, file_name: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:ING-001d] make_chunk_documents() / make_table_chunk_documents() —
-#                 assembles the final {id, text, metadata} document dicts
+# [OPS:ING-001d] make_chunk_documents() / make_table_chunk_documents()
 #
-# WHAT: the text field is prefixed with the document title
-#       ("{title}\n\n{chunk}") so the embedding captures the title's
-#       context even for a chunk deep in the middle of a long document.
-#       metadata carries everything downstream code needs: department
-#       (for the salient department badge [OPS:FE-CHAT]), source
-#       ("local_seed" vs "google_drive", for the sources display label
-#       [OPS:CHAT-012]), chunk_index (used as pgvector's `ordinal`
-#       upsert key [OPS:PVEC-002]/[OPS:PVEC-003]).
-# CALLED BY: build_local_index.py / build_drive_index.py's discover_
-#       documents() — the direct output feeds straight into
-#       [OPS:IDX-004] PersistedInMemorySearch.ingest_documents().
+# What it does: builds the final document dict for each chunk — the
+# shape everything downstream expects: {"id", "text", "metadata"}. The
+# document's title is glued onto the front of every chunk's text, so
+# even a chunk from deep in the middle of a long document still carries
+# its title's context when it gets embedded. The metadata records which
+# department it's from, whether it came from the local test folder or
+# real Google Drive, and its position among the document's own chunks.
+#
+# Called by: build_local_index.py / build_drive_index.py's
+# discover_documents() — the output feeds straight into
+# PersistedInMemorySearch.ingest_documents().
 # ─────────────────────────────────────────────────────────────────────────
 def make_chunk_documents(
     text: str,
@@ -303,17 +298,17 @@ def make_table_chunk_documents(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:ING-001e] backup_index_if_exists() — pre-rebuild safety net
+# [OPS:ING-001e] backup_index_if_exists()
 #
-# WHAT: copies enhanced_index.json to backups/<stem>.<UTC timestamp>.json
-#       before ANY operation that's about to unlink() the live index —
-#       so a failed/bad reindex can be recovered from instead of losing
-#       the corpus outright. Prunes to the most recent `keep` (default
-#       5) backups for that specific index file after each call.
-# CALLED BY: build_local_index.py main() [--reset flag], build_drive_
-#       index.py main() [--reset flag], discovery.py's _run_reindex()
-#       [OPS:ADMIN-001a] — every code path that deletes+rebuilds the
-#       index calls this immediately before the unlink().
+# What it does: makes a timestamped copy of the search index file into a
+# backups/ folder, right before something is about to delete and rebuild
+# it. This exists so a bad or failed reindex can be recovered from
+# instead of losing the whole search corpus. It only keeps the 5 most
+# recent backups, deleting older ones automatically.
+#
+# Called by: every code path that deletes and rebuilds the index —
+# build_local_index.py, build_drive_index.py, and discovery.py's
+# _run_reindex() — right before it deletes the old file.
 # ─────────────────────────────────────────────────────────────────────────
 def backup_index_if_exists(index_path: Path, keep: int = 5) -> Path | None:
     """
