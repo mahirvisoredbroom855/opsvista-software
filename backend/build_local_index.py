@@ -45,28 +45,30 @@ from app.features.rag_chatbot.ingestion_common import (
 )
 from app.features.rag_chatbot.vector.persisted_inmemory_search import PersistedInMemorySearch
 
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:ING-002-local] — local-folder ingestion CLI (the Drive-free
-#          sibling of build_drive_index.py [OPS:ING-002])
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:ING-002-local]
 #
-# Same discover -> chunk -> embed -> index -> dual-write pipeline as the
-# Drive path, just walking a local directory tree instead of calling the
-# Google Drive API — used for fast local dev/bring-up with mock
-# embeddings and zero external dependencies. See [OPS:ING-001]
-# ingestion_common.py for the chunking/extraction logic shared with the
-# real build_drive_index.py path.
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: same job as build_drive_index.py — discover, chunk,
+# embed, and index documents — but reads from a local folder of sample
+# files instead of calling the real Google Drive API. Lets a new
+# developer run the whole app with zero external accounts or API keys.
+# ─────────────────────────────────────────────────────────────────────────
 DEFAULT_SOURCE = HERE / "seed_docs"
 DEFAULT_OUTPUT = HERE / "app/features/rag_chatbot/vector/enhanced_index.json"
 SUPPORTED_EXTENSIONS = ("*.md", "*.txt", "*.xlsx", "*.xlsm", "*.docx", "*.pdf")
 
 
-# [OPS:ING-002-local-a] discover_documents() — walks source_dir/<owner
-# folder>/<file>, dispatching Excel to make_table_chunk_documents()
-# [OPS:ING-001d] (structure-preserving) and everything else through
-# extract_text_from_file() [OPS:ING-001b] + make_chunk_documents(). Same
-# structure as build_drive_index.py's discover_documents() [OPS:ING-002a]
-# — deliberately, so both ingestion paths produce identical chunk shapes.
+# [OPS:ING-002-local-a] discover_documents()
+#
+# What it does: walks every subfolder under the source directory —
+# each one treated as one person's document folder — and every
+# supported file inside it. Excel files go through the
+# structure-preserving table extractor; everything else through the
+# plain text extractor. Deliberately built the same way as
+# build_drive_index.py's discover_documents(), so both ingestion paths
+# produce identically-shaped chunks.
+#
+# Called by: main().
 def discover_documents(source_dir: Path) -> List[Dict[str, Any]]:
     """Walk source_dir/<owner folder>/<file> and return chunk documents."""
     documents: List[Dict[str, Any]] = []
@@ -124,10 +126,14 @@ def discover_documents(source_dir: Path) -> List[Dict[str, Any]]:
     return documents
 
 
-# [OPS:ING-002-local-b] main() — CLI entrypoint: optional --reset (backs
-# up + deletes the existing index via backup_index_if_exists()
-# [OPS:ING-001e]), discover -> ingest_documents() [OPS:IDX-004] -> dual-
-# write to pgvector via upsert_documents() [OPS:PVEC-003] if configured.
+# [OPS:ING-002-local-b] main()
+#
+# What it does: the CLI entrypoint. Optionally backs up and deletes the
+# old index (--reset), discovers and chunks every local document, builds
+# the new index, and copies the same data to Supabase if it's
+# configured.
+#
+# Called by: running this file directly (python backend/build_local_index.py).
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build enhanced_index.json from local seed documents")
     parser.add_argument("--source", default=str(DEFAULT_SOURCE), help="Folder containing owner subfolders")

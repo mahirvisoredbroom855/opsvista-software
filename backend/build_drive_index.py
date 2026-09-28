@@ -56,17 +56,17 @@ from app.features.rag_chatbot.ingestion_common import (
 from app.features.rag_chatbot.vector.google_drive_service import GoogleDriveService
 from app.features.rag_chatbot.vector.persisted_inmemory_search import PersistedInMemorySearch
 
-# ═══════════════════════════════════════════════════════════════════════
-# MODULE: [OPS:ING-002] — the real Google Drive ingestion CLI, the
-#          production-corpus-building path
+# ─────────────────────────────────────────────────────────────────────────
+# MODULE: [OPS:ING-002]
 #
-# discover (Drive API via [OPS:DRIVE]) -> extract/chunk ([OPS:ING-001])
-# -> embed ([OPS:IDX-002]) -> write JSON index ([OPS:IDX-004]) -> dual-
-# write pgvector ([OPS:PVEC-003]). This exact same code is what runs
-# both from the CLI and from the admin reindex endpoint's _run_reindex()
-# [OPS:ADMIN-001a] (via a direct import of discover_documents +
-# FOLDER_DEPARTMENT_MAP) — not a separate reimplementation.
-# ═══════════════════════════════════════════════════════════════════════
+# What it does: the script that rebuilds the search index from real
+# Google Drive documents. Steps: find each department's files on Drive,
+# extract and chunk their text, turn each chunk into a numeric
+# embedding, save the index to a local file, and copy the same data to
+# Supabase. The admin "Reindex now" HTTP endpoint runs this exact same
+# code directly (by importing discover_documents from this file) rather
+# than reimplementing its own copy.
+# ─────────────────────────────────────────────────────────────────────────
 DEFAULT_OUTPUT = HERE / "app/features/rag_chatbot/vector/enhanced_index.json"
 
 GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
@@ -81,11 +81,14 @@ def _looks_supported(file_name: str, mime_type: str) -> bool:
     return lower.endswith((".xlsx", ".xlsm", ".docx", ".pdf", ".txt", ".md"))
 
 
-# [OPS:ING-002b] _looks_supported() / _get_bytes() — MIME-type dispatch.
-# _get_bytes() decides download_file() vs export_google_doc_as_text()
-# [OPS:DRIVE-005] — a native Google Doc has no raw bytes to download,
-# only an exportable representation, so the two extraction mechanics
-# must diverge right here before any chunking logic runs.
+# [OPS:ING-002b] _looks_supported() / _get_bytes()
+#
+# What it does: _looks_supported() checks a file's name/type against the
+# list of formats this app can actually read. _get_bytes() decides how
+# to pull a file's content — a native Google Doc has to be exported to
+# plain text, while every other file type is downloaded directly.
+#
+# Called by: discover_documents(), once per file found on Drive.
 def _get_bytes(drive: GoogleDriveService, file_info: Dict[str, Any]) -> bytes:
     if file_info["mime_type"] == GOOGLE_DOC_MIME:
         return drive.export_google_doc_as_text(file_info["id"])
@@ -93,28 +96,20 @@ def _get_bytes(drive: GoogleDriveService, file_info: Dict[str, Any]) -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# [OPS:ING-002a] discover_documents() — the real Drive discovery loop
+# [OPS:ING-002a] discover_documents()
 #
-# API/CALL: [OPS:DRIVE-003] find_finance_folder() (resolve folder name
-#       -> ID), [OPS:DRIVE-004] list_all_files_in_folder() (recursive
-#       listing), [OPS:DRIVE-005] download_file()/export_google_doc_
-#       as_text() (via _get_bytes() [OPS:ING-002b]).
-# WHAT IT SKIPS: subfolders (already flattened by list_all_files_in_
-#       folder's own recursion — seeing a folder entry here would mean
-#       double-counting), native Google Sheets (export path differs
-#       from uploaded .xlsx and isn't implemented — logged as [SKIP],
-#       not silently dropped), and any file extension
-#       _looks_supported() [OPS:ING-002b] doesn't recognize.
-# NUANCE: Google Docs get a synthetic ".txt" suffix appended to their
-#       dispatch_name before calling extract_text_from_file()
-#       [OPS:ING-001b] — that function dispatches purely by file
-#       extension, and a Google Doc's real Drive name usually has no
-#       extension at all, so without this the doc's exported plain text
-#       would silently return '' (no dispatch match) instead of being
-#       processed.
-# CALLED BY: main() [OPS:ING-002c] (CLI), discovery.py's _run_reindex()
-#       [OPS:ADMIN-001a] (imported directly — the admin endpoint reuses
-#       this exact function).
+# What it does: for each department folder, finds its files on Drive
+# (including subfolders), skips anything unsupported (native Google
+# Sheets are logged and skipped — not silently dropped), pulls each
+# file's raw content, extracts and chunks its text, and builds the final
+# chunk documents. Excel files go through the structure-preserving table
+# extractor; everything else goes through the plain text extractor. A
+# Google Doc's real filename usually has no extension, so this appends
+# a fake ".txt" to it first — otherwise the text extractor wouldn't know
+# how to read it.
+#
+# Called by: main() (the CLI), and discovery.py's _run_reindex() (the
+# admin endpoint imports and calls this exact function directly).
 # ─────────────────────────────────────────────────────────────────────────
 def discover_documents(drive: GoogleDriveService, folder_names: List[str]) -> List[Dict[str, Any]]:
     documents: List[Dict[str, Any]] = []
@@ -195,13 +190,17 @@ def discover_documents(drive: GoogleDriveService, folder_names: List[str]) -> Li
     return documents
 
 
-# [OPS:ING-002c] main() — CLI entrypoint: connect + test_connection()
-# [OPS:DRIVE-002], optional --reset (backup_index_if_exists()
-# [OPS:ING-001e]), discover_documents() [OPS:ING-002a] -> ingest_
-# documents() [OPS:IDX-004] -> dual-write via upsert_documents()
-# [OPS:PVEC-003]. This exact sequence is what discovery.py's
-# _run_reindex() [OPS:ADMIN-001a] reimplements for the HTTP-triggered
-# path (not a call to this main(), but the same steps in the same order).
+# [OPS:ING-002c] main()
+#
+# What it does: the actual CLI entrypoint. Connects to Drive and checks
+# the connection works, optionally backs up and deletes the old index
+# (--reset), discovers and chunks every document, builds the new local
+# index, and finally copies the same data into Supabase if it's
+# configured. discovery.py's _run_reindex() runs this same sequence of
+# steps for the HTTP-triggered version (not by calling this main()
+# directly, but the same steps in the same order).
+#
+# Called by: running this file directly (python backend/build_drive_index.py).
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build enhanced_index.json from Google Drive")
     parser.add_argument(
