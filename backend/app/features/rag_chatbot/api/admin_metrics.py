@@ -26,6 +26,16 @@ from fastapi import APIRouter, Depends, Query, Request
 from app.core.auth_deps import require_roles
 from app.core.rate_limit import limiter
 
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE: [OPS:ADMIN-002] — dashboard metrics API
+#
+# One endpoint (GET /metrics) that reads the audit-trail tables
+# [OPS:PVEC-005] log_query() writes on every chat request, and aggregates
+# them in Python (not SQL GROUP BY) into the shape the dashboard's
+# charts/tables expect. Auth: [OPS:AUTH-004] require_roles — strict
+# session required, no automation-token escape hatch (contrast with
+# [OPS:ADMIN-001]'s reindex endpoint, which needs headless CI access).
+# ═══════════════════════════════════════════════════════════════════════
 _require_admin = require_roles(["Owner", "Admin"])
 
 router = APIRouter(prefix="/api/rag/admin", tags=["Admin Metrics"])
@@ -37,6 +47,9 @@ def _service_client():
     return get_service_client()
 
 
+# [OPS:ADMIN-002b] _percentile() — nearest-rank percentile (not
+# interpolated), used for p95 latency. Fine for a dashboard metric where
+# exact interpolation precision doesn't matter.
 def _percentile(values: List[float], pct: float) -> Optional[float]:
     if not values:
         return None
@@ -45,6 +58,33 @@ def _percentile(values: List[float], pct: float) -> Optional[float]:
     return values[idx]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:ADMIN-002a] GET /metrics — dashboard aggregation endpoint
+#
+# API/CALL: Supabase REST reads only (fact_query, bridge_query_citation,
+#       dim_document, fact_chunk) — no LLM/embedding calls, this is
+#       pure post-hoc analytics over what [OPS:PVEC-005] log_query()
+#       already wrote.
+# WHAT IT COMPUTES: summary (avg/p95 latency via [OPS:ADMIN-002b]
+#       _percentile(), fallback rate, avg confidence, token totals),
+#       a daily timeseries, top-cited documents/departments (by joining
+#       bridge_query_citation → dim_document within the window), a
+#       recent-queries log table (capped at 50 rows), and index
+#       freshness (total docs/chunks + most recent ingestion time).
+# WHY PYTHON AGGREGATION, NOT SQL: at current query volume (low
+#       thousands/week) pulling up to 5000 raw rows and reducing them in
+#       Python is simpler to reason about and just as fast as writing
+#       Postgres-side GROUP BY functions — same "don't build for scale
+#       you don't have yet" reasoning as skipping the ivfflat ANN index.
+#       Revisit if query volume grows large enough that a 5000-row pull
+#       becomes the bottleneck.
+# NUANCE: citations_resp.in_("query_id", query_ids[:1000]) hard-caps at
+#       1000 IDs — a PostgREST practical limit on IN-clause list size;
+#       harmless today since this endpoint is capped at 90 days/window
+#       and typical volume stays well under that.
+# CALLED BY (frontend): dashboard/page.tsx [OPS:FE-DASH].
+# RATE LIMIT: 60/minute.
+# ─────────────────────────────────────────────────────────────────────────
 @router.get("/metrics")
 @limiter.limit("60/minute")
 def get_metrics(

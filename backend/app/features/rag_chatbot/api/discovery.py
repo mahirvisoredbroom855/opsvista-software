@@ -30,9 +30,21 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from app.core.auth_deps import require_roles_or_automation_token
 from app.core.rate_limit import limiter
 
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE: [OPS:ADMIN-001] — admin-triggered reindex API
+#
+# The one endpoint the scheduled-reindex.yml GitHub Action [OPS:CI-001]
+# calls at 03:00 UTC daily, plus the same logic reachable manually from
+# the dashboard. Runs the SAME discovery/ingestion code path as the CLI
+# script build_drive_index.py — deliberately not a separate reimplemen-
+# tation — so "run it from cron" and "run it from the CLI" can never
+# silently drift apart in behavior.
+# ═══════════════════════════════════════════════════════════════════════
 router = APIRouter(prefix="/api/rag/admin", tags=["Admin Reindex"])
 logger = logging.getLogger(__name__)
 
+# [OPS:AUTH-005] — accepts either an Owner/Admin Supabase session OR the
+# X-Automation-Token header, since the cron job has no user session.
 _require_admin = require_roles_or_automation_token(["Owner", "Admin"])
 
 # backend/app/features/rag_chatbot/api/discovery.py -> backend/
@@ -48,6 +60,32 @@ _reindex_state: Dict[str, Any] = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:ADMIN-001a] _run_reindex() — the full pipeline: Drive scan → chunk →
+#                 embed → rebuild JSON index → dual-write pgvector
+#
+# API/CALL: Google Drive API (via GoogleDriveService [OPS:DRIVE-001]),
+#       Gemini embed_content (via [OPS:IDX-002] embed_texts(), inside
+#       PersistedInMemorySearch.ingest_documents() [OPS:IDX-004]),
+#       Supabase REST (via [OPS:PVEC-003] upsert_documents()).
+# CALLS: discover_documents() (build_drive_index.py [OPS:DRIVE-003]),
+#       backup_index_if_exists() [OPS:ING-003], PersistedInMemorySearch
+#       [OPS:IDX-003]/[OPS:IDX-004], upsert_documents() [OPS:PVEC-003].
+# WHY FULL REBUILD, NOT INCREMENTAL: the JSON index has no dedup/upsert
+#       logic on append — ingest_documents() always appends — so a
+#       repeated incremental reindex would accumulate duplicate chunks
+#       over time. Deleting and rebuilding from scratch (matching
+#       build_drive_index.py --reset) is what keeps it correct;
+#       pgvector's side is safe either way since it upserts on a real
+#       conflict key (document_id, ordinal).
+# RUNS AS: a background task (threading, not asyncio) — a full Drive
+#       scan + re-embed can take minutes, so this can't block the HTTP
+#       response; _reindex_lock + _reindex_state give the polling
+#       GET /reindex/status endpoint something to read concurrently.
+# CALLED BY: [OPS:ADMIN-001b] trigger_reindex() via
+#       BackgroundTasks.add_task(); also invoked identically by the CI
+#       cron job hitting POST /reindex — same code, same guarantees.
+# ─────────────────────────────────────────────────────────────────────────
 def _run_reindex(folder_names: Optional[List[str]] = None) -> None:
     with _reindex_lock:
         _reindex_state.update(
@@ -111,6 +149,21 @@ def _run_reindex(folder_names: Optional[List[str]] = None) -> None:
             _reindex_state.update({"status": "failed", "finished_at": datetime.now(timezone.utc).isoformat(), "error": str(e)})
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:ADMIN-001b] POST /reindex — kicks off _run_reindex() as a
+#                 background task; returns immediately with "started"
+#
+# RATE LIMIT: 3/minute — deliberately much stricter than chat endpoints,
+#       since a reindex is an expensive Drive scan + full re-embedding
+#       run, not a cheap per-request operation. The 409 "already in
+#       progress" guard (via _reindex_state) is the real protection
+#       against overlapping runs; the rate limit is a secondary guard
+#       against accidental rapid-fire triggering.
+# AUTH: [OPS:AUTH-005] — Owner/Admin session OR X-Automation-Token.
+# CALLED BY (over HTTP): the dashboard's manual "Reindex now" action;
+#       scheduled-reindex.yml's [OPS:CI-001] daily cron, using
+#       X-Automation-Token instead of a session.
+# ─────────────────────────────────────────────────────────────────────────
 @router.post("/reindex")
 @limiter.limit("3/minute")
 def trigger_reindex(
@@ -125,6 +178,9 @@ def trigger_reindex(
     return {"status": "started", "message": "Reindex running in background; poll GET /api/rag/admin/reindex/status"}
 
 
+# [OPS:ADMIN-001c] GET /reindex/status — polled by the dashboard and by
+# scheduled-reindex.yml's [OPS:CI-001] status-check step after triggering
+# a reindex, since the actual work runs in a background thread.
 @router.get("/reindex/status")
 def reindex_status(current_user: Dict[str, Any] = Depends(_require_admin)) -> Dict[str, Any]:
     return _reindex_state
