@@ -33,8 +33,22 @@ DROP TABLE IF EXISTS dim_document CASCADE;
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto; -- for gen_random_uuid()
 
+-- ═══════════════════════════════════════════════════════════════════════
+-- MODULE: [OPS:SCHEMA] — the pgvector fallback + audit-trail schema
+--
+-- Written to by [OPS:PVEC-003] upsert_documents() (dim_document/fact_chunk/
+-- fact_embedding), [OPS:PVEC-005] log_query() (fact_query/
+-- bridge_query_citation), [OPS:PVEC-006] upsert_query_embedding()
+-- (fact_query_embedding). Read by [OPS:PVEC-004] pgvector_search() (via
+-- match_chunks() [OPS:SCHEMA-003]) and [OPS:PVEC-007] find_similar_queries()
+-- (via match_queries() [OPS:SCHEMA-004]).
+-- ═══════════════════════════════════════════════════════════════════════
+
 -- ---------------------------------------------------------------------------
--- Document registry
+-- [OPS:SCHEMA-001] dim_document — one row per source document (Drive file or
+-- local seed_docs file), keyed by (source_type, source_path) — the same
+-- identity key [OPS:PVEC-002] _document_source_path() computes in Python, so
+-- the two must always agree or upserts/citations silently fail to match.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS dim_document (
     document_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -50,8 +64,12 @@ CREATE TABLE IF NOT EXISTS dim_document (
 );
 
 -- ---------------------------------------------------------------------------
--- Text chunks (one row per retrieval-granularity chunk, matching what the
--- enhanced_index.json ingestion pipeline already produces)
+-- [OPS:SCHEMA-002] fact_chunk — one row per retrieval-granularity chunk,
+-- matching exactly what the enhanced_index.json ingestion pipeline
+-- ([OPS:ING-001d] make_chunk_documents()) already produces. `ordinal` is the
+-- same value as the Python-side chunk_index metadata field — the
+-- (document_id, ordinal) unique constraint is pgvector_store.py's upsert
+-- conflict key [OPS:PVEC-003].
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_chunk (
     chunk_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -64,10 +82,13 @@ CREATE TABLE IF NOT EXISTS fact_chunk (
 );
 
 -- ---------------------------------------------------------------------------
--- Embeddings — the actual pgvector fallback store. Spec note: "vectors
--- reside in enhanced_index.json or pgvector" — here they reside in both,
--- written by the same ingestion pass (dual-write), so the fallback path has
--- real, current data rather than a hollow adapter.
+-- [OPS:SCHEMA-002b] fact_embedding — the actual pgvector fallback store.
+-- Spec note: "vectors reside in enhanced_index.json or pgvector" — here they
+-- reside in BOTH, written by the same ingestion pass (dual-write via
+-- [OPS:PVEC-003] upsert_documents()), so the fallback path has real, current
+-- data rather than a hollow adapter. VECTOR(1536), not Gemini's native 3072
+-- — see the file header comment for why (Matryoshka truncation, pgvector's
+-- ivfflat/hnsw 2000-dim cap).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_embedding (
     chunk_id       UUID PRIMARY KEY REFERENCES fact_chunk(chunk_id) ON DELETE CASCADE,
@@ -77,7 +98,10 @@ CREATE TABLE IF NOT EXISTS fact_embedding (
     generated_at   TIMESTAMPTZ DEFAULT now()
 );
 
--- No ANN index yet, deliberately. pgvector's guidance is roughly
+-- [OPS:SCHEMA-002c] No ANN index yet, deliberately — confirmed live: every
+-- pgvector similarity search today (match_chunks/match_queries) is an exact
+-- sequential scan, not an ivfflat/hnsw-indexed approximate search. pgvector's
+-- guidance is roughly
 -- `lists = rows / 1000` for ivfflat — with a few hundred rows in this
 -- corpus, that rounds to ~0-1 lists, meaning an index here would make
 -- search *worse* (each cluster ends up with ~1 vector, badly approximating
@@ -94,8 +118,11 @@ CREATE TABLE IF NOT EXISTS fact_embedding (
 -- to build: `USING hnsw (embedding vector_cosine_ops)`).
 
 -- ---------------------------------------------------------------------------
--- Query audit log (operational transparency / compliance, per spec section
--- 8 "Operational Monitoring" and 14 "Privacy Policy & Data Compliance")
+-- [OPS:SCHEMA-003b] fact_query — query audit log (operational transparency /
+-- compliance, per spec section 8 "Operational Monitoring" and 14 "Privacy
+-- Policy & Data Compliance"). Written by [OPS:PVEC-005] log_query() on every
+-- chat request; user_rating written separately by [OPS:PVEC-008]
+-- set_feedback() when the user clicks thumbs up/down.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_query (
     query_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -113,12 +140,13 @@ CREATE TABLE IF NOT EXISTS fact_query (
 );
 
 -- ---------------------------------------------------------------------------
--- Query embeddings — powers the "similar questions others are asking" UI
--- feature. Same pattern as fact_embedding/match_chunks (dual-path
--- retrieval), applied to past *queries* instead of document chunks: every
--- answered query gets embedded and stored here, so a new question can be
+-- [OPS:SCHEMA-003c] fact_query_embedding — powers the "similar questions
+-- others are asking" UI feature. Same pattern as fact_embedding/
+-- match_chunks (dual-path retrieval), applied to past *queries* instead of
+-- document chunks: every answered query gets embedded and stored here
+-- (via [OPS:PVEC-006] upsert_query_embedding()), so a new question can be
 -- compared against real prior questions via cosine similarity rather than
--- a fake/static number.
+-- a fake/static number. Read by match_queries() [OPS:SCHEMA-004].
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS fact_query_embedding (
     query_id      UUID PRIMARY KEY REFERENCES fact_query(query_id) ON DELETE CASCADE,
@@ -126,6 +154,12 @@ CREATE TABLE IF NOT EXISTS fact_query_embedding (
     generated_at  TIMESTAMPTZ DEFAULT now()
 );
 
+-- [OPS:SCHEMA-004b] bridge_query_citation — one row per source cited in an
+-- answer (rank-ordered). Written by [OPS:PVEC-005] log_query(), which
+-- re-derives document_id/chunk_id via the same lookup keys
+-- [OPS:PVEC-003] upsert_documents() wrote them under. Read by
+-- [OPS:ADMIN-002a] GET /metrics for the top-documents/top-departments
+-- aggregation.
 CREATE TABLE IF NOT EXISTS bridge_query_citation (
     query_id         UUID REFERENCES fact_query(query_id) ON DELETE CASCADE,
     document_id      UUID REFERENCES dim_document(document_id),
@@ -136,14 +170,20 @@ CREATE TABLE IF NOT EXISTS bridge_query_citation (
 );
 
 -- ---------------------------------------------------------------------------
--- match_chunks(): the actual pgvector fallback query. supabase-py's REST
--- interface can't express the `<=>` distance operator directly, so it's
--- exposed as a Postgres function and called via .rpc("match_chunks", {...}).
+-- [OPS:SCHEMA-003] match_chunks() — the actual pgvector fallback query.
+-- supabase-py's REST interface can't express the `<=>` distance operator
+-- directly, so it's exposed as a Postgres function and called via
+-- .rpc("match_chunks", {...}) from [OPS:PVEC-004] pgvector_search().
 --
 -- query_embedding is accepted as TEXT (a JSON-array string like
 -- "[0.01,-0.02,...]") rather than VECTOR directly — PostgREST's JSON->vector
--- coercion over RPC is unreliable, whereas text->vector casting is pgvector's
--- documented, guaranteed-stable input path.
+-- coercion over RPC is unreliable, whereas text->vector casting (see the
+-- `::vector` cast in the SELECT below) is pgvector's documented,
+-- guaranteed-stable input path. `1 - (embedding <=> query_embedding)`
+-- converts cosine DISTANCE (0=identical) into cosine SIMILARITY
+-- (1=identical) — the same convention [OPS:IDX-001] _cosine() returns on
+-- the primary-index side, so scores from both retrieval paths read the
+-- same way to a human even though they're computed on different machines.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION match_chunks(
     query_embedding TEXT,
@@ -181,11 +221,17 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- match_queries(): finds prior questions similar to a new one, via the same
--- text->vector RPC pattern as match_chunks (see its comment for why TEXT,
--- not VECTOR, is the parameter type). exclude_query_id lets a caller keep
--- the current in-flight query out of its own "similar questions" result
--- once it's been logged.
+-- [OPS:SCHEMA-004] match_queries() — finds prior questions similar to a new
+-- one, via the same text->vector RPC pattern as match_chunks()
+-- [OPS:SCHEMA-003] (see its comment for why TEXT, not VECTOR, is the
+-- parameter type). Called via .rpc("match_queries", {...}) from
+-- [OPS:PVEC-007] find_similar_queries(). exclude_query_id lets a caller
+-- keep the current in-flight query out of its own "similar questions"
+-- result — though in practice this is somewhat redundant with the ordering
+-- guarantee in [OPS:PVEC-006]: the current query's own embedding isn't
+-- written to fact_query_embedding until AFTER its similar-queries lookup
+-- already ran, so it usually can't match itself anyway; exclude_query_id is
+-- the explicit belt-and-suspenders guard for that ordering.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION match_queries(
     query_embedding TEXT,
@@ -213,7 +259,17 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- Row Level Security
+-- [OPS:SCHEMA-005] Row Level Security
+--
+-- Enforced at the DATABASE level, not just in application code — this is
+-- what [OPS:AUTH-002] verify_supabase_token()'s anon-key client actually
+-- relies on: an anon-key client making a direct table read is still
+-- restricted by these policies even if the backend's own auth check were
+-- ever bypassed. All backend writes (ingestion, audit logging) instead use
+-- the service-role client ([OPS:PVEC-001] _get_service_client()), which
+-- bypasses RLS entirely by Supabase design — that's WHY there are no
+-- INSERT/UPDATE/DELETE policies defined below: they'd be dead code, since
+-- the only writer never goes through the policy-checked path.
 --
 -- Reasoning: the knowledge corpus tables (dim_document/fact_chunk/
 -- fact_embedding) are read-only internal reference data — any authenticated
