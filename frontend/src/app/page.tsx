@@ -43,6 +43,19 @@ import {
 } from "../lib/chatUtils";
 import { supabase } from "../lib/supabaseClient";
 
+// ═══════════════════════════════════════════════════════════════════════
+// MODULE: [OPS:FE-CHAT] — the chat UI, this app's single most important
+//          frontend file
+//
+// Types below are the hand-kept mirror of the backend's SSE event payloads
+// (chat.py's [OPS:CHAT-019] _sse_event()/[OPS:CHAT-020] chat_stream()) and
+// ChatResponse [OPS:CHAT-004] — no shared schema/codegen, so a backend
+// field rename needs a matching edit here or the UI silently drops data.
+// Salient UI pieces (department badges, real source button, similar-
+// questions) are implemented as [OPS:FE-CHAT-*] components below; the SSE
+// parsing + streaming state machine lives in sendMessage()
+// [OPS:FE-CHAT-SSE].
+// ═══════════════════════════════════════════════════════════════════════
 type Source = {
   text: string;
   score: number;
@@ -263,10 +276,12 @@ function SourceCard({ source }: { source: Source }) {
 }
 
 /**
- * Always-visible department badges — previously buried inside the
- * collapsed sources <details>, meaning you had to click to expand before
- * finding out an answer was even HR- or Finance-related. Department is
- * exactly the kind of thing that should be salient at a glance.
+ * [OPS:FE-CHAT-a] Always-visible department badges — previously buried
+ * inside the collapsed sources <details>, meaning you had to click to
+ * expand before finding out an answer was even HR- or Finance-related.
+ * Department is exactly the kind of thing that should be salient at a
+ * glance. Reads Source.metadata.department, set server-side by
+ * [OPS:ING-001d] make_chunk_documents().
  */
 function SourceClusters({ sources }: { sources: Source[] }) {
   const counts = new Map<string, number>();
@@ -286,9 +301,11 @@ function SourceClusters({ sources }: { sources: Source[] }) {
 }
 
 /**
- * A real clickable button (not a native <summary> disguised as a link) that
- * discloses the full source list + charts on demand, while the department
- * badges above it stay visible either way.
+ * [OPS:FE-CHAT-b] A real clickable <button> (not a native <summary>
+ * disguised as a link) that discloses the full source list + charts on
+ * demand, while the department badges above it ([OPS:FE-CHAT-a]) stay
+ * visible either way. useState(open) + aria-expanded is the entire
+ * disclosure mechanism — no external UI library.
  */
 function SourcesToggle({
   sources,
@@ -327,11 +344,13 @@ function SourcesToggle({
 }
 
 /**
- * "People are also asking" — a real cosine-similarity match against
- * previously-logged queries (see find_similar_queries() in
- * pgvector_store.py), not a placeholder number. Empty means genuinely no
- * similar prior question cleared the similarity threshold yet, so this
- * renders nothing rather than a fabricated "0 similar" line.
+ * [OPS:FE-CHAT-c] "People are also asking" — a real cosine-similarity match
+ * against previously-logged queries (see [OPS:PVEC-007]
+ * find_similar_queries() in pgvector_store.py), not a placeholder number.
+ * Empty means genuinely no similar prior question cleared the similarity
+ * threshold ([OPS:PVEC-006] SIMILAR_QUERY_THRESHOLD) yet, so this renders
+ * nothing rather than a fabricated "0 similar" line. Fed by the `meta` SSE
+ * event's similar_queries field ([OPS:CHAT-020]).
  */
 function SimilarQuestions({ items }: { items: SimilarQuery[] }) {
   if (!items || items.length === 0) return null;
@@ -383,11 +402,12 @@ function CopyButton({ text }: { text: string }) {
 }
 
 /**
- * Retrieval-transparency panel: surfaces the dual-path trace (which index
- * answered, confidence, source diversity) that the backend has always sent
- * but the UI previously discarded. This is the "grounding inspector" piece
- * of a properly transparent RAG UI — showing *how* an answer was found, not
- * just what it cited.
+ * [OPS:FE-CHAT-d] Retrieval-transparency panel: surfaces the dual-path
+ * trace object [OPS:CHAT-010] retrieve_with_trace() returns — which index
+ * answered, confidence, source diversity. Directly renders backend field
+ * names (used_fallback, retrieval_confidence, source_diversity,
+ * fallback_reason) with no server-side reshaping, so this component is
+ * the most exact 1:1 mirror of a backend data shape in the whole frontend.
  */
 function TracePanel({ trace }: { trace: Trace }) {
   const confidencePct = Math.round((trace.retrieval_confidence ?? 0) * 100);
@@ -558,6 +578,27 @@ export default function Page() {
     }
   }
 
+  // ───────────────────────────────────────────────────────────────────
+  // [OPS:FE-CHAT-SSE] sendMessage() — hand-rolled SSE client, the core
+  //                    request/streaming logic of the whole chat UI
+  //
+  // WHY NOT THE BROWSER'S EventSource: EventSource can't send custom
+  // request headers — no way to attach "Authorization: Bearer <token>"
+  // for [OPS:AUTH-001]. fetch() + res.body.getReader() is used instead,
+  // manually decoding UTF-8 chunks and splitting on "\n\n" (frame
+  // boundary) then "\n" (event:/data: lines) — the exact inverse of
+  // [OPS:CHAT-019] _sse_event()'s formatting on the backend.
+  // EVENT HANDLING: "meta" fills in chatId/sources/trace/similarQueries
+  // on the pending assistant message (still empty content at this
+  // point); "token" appends to content incrementally (the actual
+  // streaming effect); "error" appends a formatted error inline into
+  // the message rather than a separate UI state; "done" clears
+  // `pending` and sets the final model name. The `buffer` variable
+  // deliberately holds back an incomplete trailing frame (the last
+  // element after split("\n\n")) across read() calls, since a chunk
+  // boundary from the network has no guaranteed alignment with an SSE
+  // frame boundary.
+  // ───────────────────────────────────────────────────────────────────
   async function sendMessage(message: string) {
     if (!message.trim() || loading) return;
     setLoading(true);

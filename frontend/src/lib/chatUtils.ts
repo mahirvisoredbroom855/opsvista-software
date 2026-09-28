@@ -1,3 +1,9 @@
+// [OPS:FE-LIB-002] Chat/dashboard helpers used by page.tsx [OPS:FE-CHAT] and
+// dashboard/page.tsx [OPS:FE-DASH]. TableData mirrors the backend's
+// metadata.table shape produced by [OPS:ING-001c]
+// extract_table_chunks_from_xlsx_bytes() — a cited chunk's table field is
+// passed straight through to detectNumericColumns()/selectChartableColumns()
+// below to decide whether/how to render it as a chart instead of plain text.
 export type TableData = { sheet: string; columns: string[]; rows: string[][] };
 
 export function uid(): string {
@@ -14,6 +20,9 @@ export function formatTime(ts: number): string {
 /** "2 hours ago" / "3 days ago" style relative timestamp, for the index's
  * "last synced" badge — coarse on purpose, this is a freshness signal, not
  * a precise audit log entry. */
+// [OPS:FE-LIB-002b] formatRelativeTime() — consumes file_info.modified_epoch
+// from the backend's GET /index/status [OPS:CHAT-023] to render the "Synced
+// X ago" badge.
 export function formatRelativeTime(
   epochSeconds: number,
   now = Date.now(),

@@ -31,6 +31,14 @@ import {
 } from "recharts";
 import { supabase } from "../../lib/supabaseClient";
 
+// ═══════════════════════════════════════════════════════════════════════
+// MODULE: [OPS:FE-DASH] — the observability dashboard
+//
+// Fetches [OPS:ADMIN-002a] GET /api/rag/admin/metrics and renders the
+// Metrics type below (kept in sync by hand with the backend's response
+// shape — no shared schema/codegen between the two). ReindexButton
+// [OPS:FE-DASH-a] separately drives [OPS:ADMIN-001b]/[OPS:ADMIN-001c].
+// ═══════════════════════════════════════════════════════════════════════
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") ||
   "http://localhost:8000";
@@ -137,6 +145,12 @@ type ReindexStatus = {
   error: string | null;
 };
 
+// [OPS:FE-DASH-a] ReindexButton — trigger() POSTs [OPS:ADMIN-001b]
+// /reindex, then poll() calls [OPS:ADMIN-001c] GET /reindex/status every
+// 3s while status stays "running" (self-rescheduling via setTimeout, not
+// setInterval — avoids overlapping requests if one poll is slow). A 409
+// (already running) from trigger() is treated as success, not an error,
+// since it just means an in-flight reindex is already being tracked.
 function ReindexButton({ session }: { session: Session | null }) {
   const [status, setStatus] = useState<ReindexStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -255,6 +269,9 @@ export default function DashboardPage() {
     };
   }, [router]);
 
+  // [OPS:FE-DASH-b] metrics fetch — re-runs whenever `days` (the 7/30/90
+  // window toggle) or the session changes; waits on authChecked first when
+  // REQUIRE_AUTH is set, so it never fires with a stale/absent token.
   useEffect(() => {
     if (REQUIRE_AUTH && !authChecked) return;
     setLoading(true);

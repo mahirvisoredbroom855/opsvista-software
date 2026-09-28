@@ -6,6 +6,12 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
+// [OPS:FE-LOGIN] — sign-in/sign-up screen, calls Supabase Auth directly from
+// the browser (supabase.auth.signInWithPassword / signUp) — the backend
+// never sees a password, only the resulting access token on later requests
+// (via [OPS:AUTH-001] get_current_user_optional()). Three-mode state machine
+// (signin/signup/confirm-pending) rather than separate routes, so switching
+// modes doesn't lose in-progress form state.
 type Mode = "signin" | "signup" | "confirm-pending";
 
 export default function LoginPage() {
@@ -21,6 +27,13 @@ export default function LoginPage() {
     setErr(null);
   }
 
+  // [OPS:FE-LOGIN-a] submit() — the only place this file talks to Supabase.
+  // signup's data.session check: if email confirmation is disabled on the
+  // Supabase project, signUp() returns an active session immediately (goes
+  // straight to the app); if enabled, session is null and the UI switches
+  // to "confirm-pending" instead — supabaseClient's detectSessionInUrl
+  // [OPS:FE-LIB-001] is what picks up the session automatically once the
+  // user clicks the emailed confirmation link and lands back on the app.
   async function submit() {
     setBusy(true);
     setErr(null);
