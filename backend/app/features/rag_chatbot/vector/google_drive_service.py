@@ -1,3 +1,17 @@
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE: [OPS:DRIVE] — Google Drive API integration
+#
+# The service-account-backed Drive client used by build_drive_index.py
+# [OPS:ING-002] and the admin reindex endpoint [OPS:ADMIN-001a]. NUANCE
+# worth flagging explicitly: this class carries two generations of code.
+# The methods actually exercised by the current ingestion pipeline are
+# tagged individually below ([OPS:DRIVE-001] through [OPS:DRIVE-005]).
+# Everything past that — list_excel_files(), list_target_finance_files(),
+# the recursive target-file search methods, get_quota_info() — is earlier,
+# finance-file-specific scaffolding from before generic multi-department
+# ingestion existed; see [OPS:DRIVE-006] for the one tag covering all of
+# it. It still works, it's just not on the path anything calls today.
+# ═══════════════════════════════════════════════════════════════════════
 # Google Drive Integration Service
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -39,6 +53,28 @@ def _resolve_credentials_path(raw: str) -> str:
     return str(candidate)  # doesn't exist; return the repo-root-relative guess for a clear error message
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:DRIVE-001] GoogleDriveService.__init__() / _connect() —
+#                 service-account auth, constructed eagerly (connects
+#                 in the constructor, not lazily)
+#
+# WHAT: reads a service-account JSON key (GOOGLE_DRIVE_CREDENTIALS_PATH),
+#       resolved via _resolve_credentials_path() against the repo ROOT
+#       specifically — not the process's current working directory —
+#       because the same relative path in .env would otherwise resolve
+#       differently depending on whether the app was launched from the
+#       repo root or from backend/ (e.g. `uvicorn app.main:app` run from
+#       inside backend/). Scope is drive.readonly — this service can
+#       never write to or modify Drive content.
+# BREAKS IF: the credentials file is missing, or the target Drive folder
+#       hasn't been shared with the service account's client_email
+#       (Viewer access) — raises at construction time in either case,
+#       which is why callers (build_drive_index.py, the reindex admin
+#       endpoint) wrap GoogleDriveService() construction and check
+#       test_connection() [OPS:DRIVE-002] before proceeding.
+# CALLED BY: build_drive_index.py's main() [OPS:ING-002],
+#       discovery.py's _run_reindex() [OPS:ADMIN-001a].
+# ─────────────────────────────────────────────────────────────────────────
 class GoogleDriveService:
     """Service for interacting with Google Drive API"""
 
@@ -73,6 +109,9 @@ class GoogleDriveService:
             logger.error(f"❌ Failed to connect to Google Drive: {str(e)}")
             raise
     
+    # [OPS:DRIVE-002] test_connection() — cheap health check (list, pageSize=1)
+    # called right after construction by both callers listed in
+    # [OPS:DRIVE-001], before any real ingestion work starts.
     def test_connection(self) -> Dict[str, any]:
         """Test Google Drive connection"""
         try:
@@ -92,6 +131,22 @@ class GoogleDriveService:
                 'error': str(e)
             }
     
+    # ─────────────────────────────────────────────────────────────────
+    # [OPS:DRIVE-003] find_finance_folder() — despite the legacy name,
+    #                 this is the GENERIC "find folder by owner name"
+    #                 lookup used for every department, not just Finance
+    #
+    # WHAT: `name contains '<folder_name>'` (not exact equality) so a
+    #       short owner key from FOLDER_DEPARTMENT_MAP
+    #       (ingestion_common.py [OPS:ING-001], e.g. "Riaz Uddin
+    #       Sarker") still matches the real Drive folder even when it
+    #       carries a department suffix (e.g. "Riaz Uddin Sarker
+    #       (Admin)"). The apostrophe-escaping on `folder_name` guards
+    #       against breaking the Drive query string syntax, not against
+    #       injection in a security sense (this is a read-only query).
+    # CALLED BY: build_drive_index.py's discover_documents()
+    #       [OPS:ING-002], once per department folder being ingested.
+    # ─────────────────────────────────────────────────────────────────
     def find_finance_folder(self, folder_name: str = "Md. Mizanur Rahman (PTIL)") -> Optional[str]:
         """
         Find a folder by name (despite the historical "finance" name, this is
@@ -123,6 +178,29 @@ class GoogleDriveService:
             logger.error(f"❌ Error finding finance folder: {str(e)}")
             return None
     
+    # ─────────────────────────────────────────────────────────────────
+    # [OPS:DRIVE-006] Legacy finance-specific scaffolding — NOT on the
+    #                 current ingestion path
+    #
+    # WHAT: this tag covers list_excel_files(), list_target_finance_
+    #       files(), _is_target_file_match(), find_files_modified_
+    #       since(), find_modified_target_files_since(),
+    #       list_target_finance_files_recursive(), _get_all_subfolders(),
+    #       _search_folder_for_targets(), get_quota_info(), and
+    #       find_target_files_anywhere() — everything below this point
+    #       up to export_google_doc_as_text() [OPS:DRIVE-005].
+    # NUANCE: predates the current generic multi-department ingestion
+    #       pipeline (build_drive_index.py + ingestion_common.py
+    #       [OPS:ING-001]) — it hard-codes three specific Finance-folder
+    #       Excel filenames (TARGET_FILES) from an earlier, narrower
+    #       version of this project focused on a handful of known
+    #       spreadsheets. [OPS:DRIVE-004] list_all_files_in_folder() is
+    #       what actually replaced this for real ingestion: generic,
+    #       not filename-specific, works for any department/file type.
+    #       Left in place rather than deleted since nothing currently
+    #       calls it but removing it wasn't in scope for this pass —
+    #       worth flagging as a cleanup candidate if asked.
+    # ─────────────────────────────────────────────────────────────────
     def list_excel_files(self, folder_id: str = None) -> List[Dict[str, any]]:
         """List all Excel files in the finance folder"""
         try:
@@ -460,6 +538,22 @@ class GoogleDriveService:
             logger.error(f"❌ Error searching folder {folder_id}: {str(e)}")
             return []
     
+    # ─────────────────────────────────────────────────────────────────
+    # [OPS:DRIVE-004] list_all_files_in_folder() — the actual file
+    #                 discovery call used by current ingestion
+    #
+    # WHAT: unlike the legacy [OPS:DRIVE-006] methods, this is NOT
+    #       filtered to any specific MIME type or filename — returns
+    #       every non-trashed file, and recurses into subfolders when
+    #       recursive=True (the default, and what build_drive_index.py
+    #       always passes). MIME-type filtering/dispatch happens later,
+    #       in build_drive_index.py's discover_documents() [OPS:ING-002]
+    #       and ingestion_common.py's extract_text_from_file()
+    #       [OPS:ING-001b].
+    # CALLED BY: build_drive_index.py's discover_documents()
+    #       [OPS:ING-002], once per department folder (after
+    #       find_finance_folder() [OPS:DRIVE-003] resolves the folder ID).
+    # ─────────────────────────────────────────────────────────────────
     def list_all_files_in_folder(self, folder_id: str, recursive: bool = True) -> List[Dict[str, any]]:
         """
         List every non-trashed file (any type) directly inside folder_id, and
@@ -496,6 +590,20 @@ class GoogleDriveService:
             logger.error(f"❌ Error listing files in folder {folder_id}: {str(e)}")
             return found
 
+    # ─────────────────────────────────────────────────────────────────
+    # [OPS:DRIVE-005] download_file() (above, defined earlier in the
+    #                 class) + export_google_doc_as_text() — the two
+    #                 ways bytes actually get pulled from Drive
+    #
+    # WHAT: regular files (.pdf/.docx/.xlsx/.txt/.md) go through
+    #       download_file() — files().get_media(). Native Google Docs
+    #       have no raw bytes to download (they're not a file, they're
+    #       a live document) — they must be EXPORTED to a concrete
+    #       format instead, here as text/plain via files().export_media().
+    #       build_drive_index.py's _get_bytes() [OPS:ING-002b] is what
+    #       decides which of the two to call, based on mime_type.
+    # CALLED BY: build_drive_index.py's _get_bytes() [OPS:ING-002b].
+    # ─────────────────────────────────────────────────────────────────
     def export_google_doc_as_text(self, file_id: str) -> bytes:
         """Export a native Google Doc as plain text (Docs aren't downloadable via get_media)."""
         try:

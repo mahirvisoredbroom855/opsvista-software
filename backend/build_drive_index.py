@@ -49,6 +49,17 @@ from app.features.rag_chatbot.ingestion_common import (
 from app.features.rag_chatbot.vector.google_drive_service import GoogleDriveService
 from app.features.rag_chatbot.vector.persisted_inmemory_search import PersistedInMemorySearch
 
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE: [OPS:ING-002] — the real Google Drive ingestion CLI, the
+#          production-corpus-building path
+#
+# discover (Drive API via [OPS:DRIVE]) -> extract/chunk ([OPS:ING-001])
+# -> embed ([OPS:IDX-002]) -> write JSON index ([OPS:IDX-004]) -> dual-
+# write pgvector ([OPS:PVEC-003]). This exact same code is what runs
+# both from the CLI and from the admin reindex endpoint's _run_reindex()
+# [OPS:ADMIN-001a] (via a direct import of discover_documents +
+# FOLDER_DEPARTMENT_MAP) — not a separate reimplementation.
+# ═══════════════════════════════════════════════════════════════════════
 DEFAULT_OUTPUT = HERE / "app/features/rag_chatbot/vector/enhanced_index.json"
 
 GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
@@ -63,12 +74,41 @@ def _looks_supported(file_name: str, mime_type: str) -> bool:
     return lower.endswith((".xlsx", ".xlsm", ".docx", ".pdf", ".txt", ".md"))
 
 
+# [OPS:ING-002b] _looks_supported() / _get_bytes() — MIME-type dispatch.
+# _get_bytes() decides download_file() vs export_google_doc_as_text()
+# [OPS:DRIVE-005] — a native Google Doc has no raw bytes to download,
+# only an exportable representation, so the two extraction mechanics
+# must diverge right here before any chunking logic runs.
 def _get_bytes(drive: GoogleDriveService, file_info: Dict[str, Any]) -> bytes:
     if file_info["mime_type"] == GOOGLE_DOC_MIME:
         return drive.export_google_doc_as_text(file_info["id"])
     return drive.download_file(file_info["id"])
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:ING-002a] discover_documents() — the real Drive discovery loop
+#
+# API/CALL: [OPS:DRIVE-003] find_finance_folder() (resolve folder name
+#       -> ID), [OPS:DRIVE-004] list_all_files_in_folder() (recursive
+#       listing), [OPS:DRIVE-005] download_file()/export_google_doc_
+#       as_text() (via _get_bytes() [OPS:ING-002b]).
+# WHAT IT SKIPS: subfolders (already flattened by list_all_files_in_
+#       folder's own recursion — seeing a folder entry here would mean
+#       double-counting), native Google Sheets (export path differs
+#       from uploaded .xlsx and isn't implemented — logged as [SKIP],
+#       not silently dropped), and any file extension
+#       _looks_supported() [OPS:ING-002b] doesn't recognize.
+# NUANCE: Google Docs get a synthetic ".txt" suffix appended to their
+#       dispatch_name before calling extract_text_from_file()
+#       [OPS:ING-001b] — that function dispatches purely by file
+#       extension, and a Google Doc's real Drive name usually has no
+#       extension at all, so without this the doc's exported plain text
+#       would silently return '' (no dispatch match) instead of being
+#       processed.
+# CALLED BY: main() [OPS:ING-002c] (CLI), discovery.py's _run_reindex()
+#       [OPS:ADMIN-001a] (imported directly — the admin endpoint reuses
+#       this exact function).
+# ─────────────────────────────────────────────────────────────────────────
 def discover_documents(drive: GoogleDriveService, folder_names: List[str]) -> List[Dict[str, Any]]:
     documents: List[Dict[str, Any]] = []
 
@@ -148,6 +188,13 @@ def discover_documents(drive: GoogleDriveService, folder_names: List[str]) -> Li
     return documents
 
 
+# [OPS:ING-002c] main() — CLI entrypoint: connect + test_connection()
+# [OPS:DRIVE-002], optional --reset (backup_index_if_exists()
+# [OPS:ING-001e]), discover_documents() [OPS:ING-002a] -> ingest_
+# documents() [OPS:IDX-004] -> dual-write via upsert_documents()
+# [OPS:PVEC-003]. This exact sequence is what discovery.py's
+# _run_reindex() [OPS:ADMIN-001a] reimplements for the HTTP-triggered
+# path (not a call to this main(), but the same steps in the same order).
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build enhanced_index.json from Google Drive")
     parser.add_argument(
