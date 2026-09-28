@@ -1,3 +1,11 @@
+/**
+ * This is the sign-in / sign-up screen. It talks directly to Supabase
+ * (the login provider) from the browser — the backend server never
+ * sees anyone's password, only the access token Supabase hands back
+ * afterward. New accounts get no special access by default; an Owner
+ * has to manually promote someone before they can see the admin
+ * dashboard.
+ */
 "use client";
 
 import { CheckCircle2, Loader2, Lock, Mail, User } from "lucide-react";

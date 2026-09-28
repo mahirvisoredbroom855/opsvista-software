@@ -1,3 +1,9 @@
+/**
+ * This creates the one Supabase connection the browser uses to sign
+ * people in and keep them signed in across page reloads. It only ever
+ * uses the public "anon" key — never a secret key — since this code
+ * runs in the user's own browser, where nothing can truly stay secret.
+ */
 // [OPS:FE-LIB-001] supabase — the browser-side Supabase client, ANON key
 // only (never service-role — that stays backend-only, see [OPS:PVEC-001]).
 // persistSession + autoRefreshToken + detectSessionInUrl together are what

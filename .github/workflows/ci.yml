@@ -1,3 +1,9 @@
+# This file runs automatically on every push and pull request: it
+# installs the backend and frontend, runs all the automated tests,
+# checks code style, and makes sure the frontend actually builds. If
+# any of that fails, GitHub shows a red X on the commit/PR so a broken
+# change never quietly slips through.
+#
 # [OPS:CI-002] Pull-request / push CI — pytest + smoke-import (backend),
 # lint + unit tests + build (frontend). branches: lists the exact branches
 # whose pushes trigger this — this is the config that was historically

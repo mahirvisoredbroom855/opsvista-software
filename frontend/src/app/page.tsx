@@ -1,3 +1,12 @@
+/**
+ * This is the chat page itself — the screen someone sees after signing
+ * in to OpsVista. It holds the input box, the Send button, and the
+ * whole conversation. When a question is sent, this file opens a live
+ * connection to the backend (a "streaming" request, so the answer can
+ * type itself onto the screen word by word) and renders whatever comes
+ * back: the answer text, the source documents it was based on, and the
+ * "how was this found" trace panel.
+ */
 "use client";
 
 import type { Session } from "@supabase/supabase-js";

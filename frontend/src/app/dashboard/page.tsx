@@ -1,3 +1,11 @@
+/**
+ * This is the observability dashboard — an Owner/Admin-only screen
+ * showing how the chatbot is actually performing: how many questions
+ * were asked, how long answers took, how often the backup search had
+ * to kick in, and which documents get cited most. It also has the
+ * "Reindex now" button that tells the backend to rescan Google Drive
+ * and rebuild the search index on demand.
+ */
 "use client";
 
 import type { Session } from "@supabase/supabase-js";

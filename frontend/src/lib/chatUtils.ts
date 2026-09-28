@@ -1,3 +1,10 @@
+/**
+ * Small, standalone helper functions shared by the chat page and the
+ * dashboard — things like "how long ago was this," "is this column
+ * full of numbers," and "which numeric columns are safe to chart
+ * together." None of these talk to the backend; they just reshape
+ * data that's already been fetched.
+ */
 // [OPS:FE-LIB-002] Chat/dashboard helpers used by page.tsx [OPS:FE-CHAT] and
 // dashboard/page.tsx [OPS:FE-DASH]. TableData mirrors the backend's
 // metadata.table shape produced by [OPS:ING-001c]

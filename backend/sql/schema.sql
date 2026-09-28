@@ -1,5 +1,12 @@
 -- OpsVista RAG — Supabase schema
 --
+-- This file creates every table the backend needs in the Supabase
+-- database: one for source documents, one for the small chunks each
+-- document gets cut into, one for each chunk's numeric fingerprint
+-- (used by the backup search), and three more that log every question
+-- ever asked, for the observability dashboard. Run this once in a
+-- fresh Supabase project's SQL Editor to set everything up.
+--
 -- Implements the data contract from the Development Specification
 -- (Section 13.4.1, "Core Tables (Supabase/PostgreSQL)") plus the pgvector
 -- fallback path described in the RAG Documentation's dual-path retrieval

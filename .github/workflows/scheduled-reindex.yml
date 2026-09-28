@@ -1,5 +1,11 @@
 name: Scheduled Reindex
 
+# This is the robot that keeps OpsVista's knowledge base fresh without
+# anyone lifting a finger. Every night, it calls the backend and says
+# "go rescan Google Drive and rebuild the search index" — using a
+# secret key instead of a human login, since nobody's around at 3am to
+# click a button.
+#
 # ═══════════════════════════════════════════════════════════════════════
 # MODULE: [OPS:CI-001] — the daily automated reindex trigger
 #
