@@ -4,7 +4,7 @@
 
 ![OpsVista](https://img.shields.io/badge/OpsVista-Enterprise%20RAG%20Knowledge%20Assistant-f59e0b?style=for-the-badge)
 
-**Ask questions about your company's own documents in plain English. Get grounded, cited answers — not guesses.**
+**Ask questions about your company's own documents in plain English. Get grounded, cited answers.**
 
 Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, built end-to-end: dual-path retrieval, real-time streaming, observability dashboard, scheduled reindexing, and role-based access control.
 
@@ -126,7 +126,7 @@ Six department folders full of ledgers, policies, and logs answer *operational* 
 
 ## ✨ Features
 
-Everything below is visible in the running app today — nothing here is planned or aspirational. Each item links back to where it's implemented so you can verify it against the code, not just this description.
+Everything below is visible in the running app today. Each item links back to where it's implemented so you can verify it against the code, not just this description.
 
 ### 💬 Chat — what each part of the widget shows
 
@@ -203,29 +203,29 @@ The diagram below is the literal implementation of that description:
 │                          CLIENT (Next.js)                            │
 │   Chat UI (streaming)      Login/Signup       Observability Dash     │
 └──────────────────────────────┬───────────────────────────────────────┘
-                                │  Supabase JWT
-┌───────────────────────────────▼───────────────────────────────────────┐
+                               │  Supabase JWT
+┌──────────────────────────────▼────────────────────────────────────────┐
 │                        API LAYER (FastAPI)                            │
-│  /chat/complete   /chat/stream   /chat/feedback   /admin/reindex       │
-│  ┌─────────────────────────────────────────────────────────────┐     │
-│  │      retrieve_with_trace() — dual-path quality gate         │     │
-│  │  ┌───────────────────────┐      ┌─────────────────────┐     │     │
-│  │  │  Enhanced Index (JSON) │ ───▶│ pgvector fallback     │     │     │
-│  │  │  primary, in-memory     │◀───│ (confidence < 0.5)    │     │     │
-│  │  └───────────────────────┘      └─────────────────────┘     │     │
-│  └─────────────────────────────────────────────────────────────┘     │
-│                                │                                       │
-│                     ┌──────────▼──────────┐                          │
-│                     │  Gemini / OpenAI LLM │                          │
-│                     └──────────────────────┘                          │
+│  /chat/complete   /chat/stream   /chat/feedback   /admin/reindex      │
+│  ┌─────────────────────────────────────────────────────────────┐      │
+│  │      retrieve_with_trace() — dual-path quality gate         │      │
+│  │  ┌───────────────────────┐      ┌─────────────────────┐     │      │
+│  │  │  Enhanced Index (JSON)│ ───▶ │ pgvector fallback   │     │      │
+│  │  │  primary, in-memory   │◀───. │ (confidence < 0.5)  │     │      │
+│  │  └───────────────────────┘      └─────────────────────┘     │      │
+│  └─────────────────────────────────────────────────────────────┘      │
+│                                │                                      │
+│                     ┌──────────▼──────────┐                           │
+│                     │  Gemini / OpenAI LLM│                           │
+│                     └─────────────────────┘                           │
 └───────────────────────────────┬─────────────────────────────────────┬─┘
                                 │                                     │
-                 ┌──────────────▼──────────────┐         ┌────────────▼────────────┐
-                 │   Supabase (Postgres)         │         │   Google Drive API v3   │
-                 │   dim_document / fact_chunk   │         │   department folders    │
-                 │   fact_embedding / fact_query │         └─────────────────────────┘
-                 │   bridge_query_citation       │
-                 └───────────────────────────────┘
+                 ┌──────────────▼───────────────┐         ┌────────────▼────────────┐
+                 │   Supabase (Postgres)        │         │   Google Drive API v3   │
+                 │   dim_document / fact_chunk  │         │   department folders    │
+                 │   fact_embedding / fact_query│         └─────────────────────────┘
+                 │   bridge_query_citation      │
+                 └──────────────────────────────┘
 ```
 
 <p align="center">
@@ -619,9 +619,7 @@ Three ways to look at it:
 2. **Supabase Studio** — Table Editor on `fact_query` / `bridge_query_citation`
 3. **Backend logs** — `tail -f` your uvicorn output; Render's log viewer shows the same on deploy
 
-<p align="center">
-  <img src="pictures/Health%20%26%20Diagnostics%20(Cheap%20Observability).png" alt="Health & Diagnostics" width="70%">
-</p>
+![Dashboard](screenshots/dashboard.png)
 
 > **In plain English — "cheap observability"** means checking system health in ways that cost nothing: no AI calls, no expensive database queries, nothing that could itself slow the system down.
 > - **Top row** — "App Start" (`main.py`) → "Check `enhanced_index.json` (path, size, mtime)" → "Set Readiness Flags (`startup_results`)" → "`/GET /api/status`." When the server first boots up, it looks at the search-index file on disk exactly *once*, notes whether it found it (and how big it is, and when it was last changed — `mtime` means "modified time"), and remembers that in memory. Every later call to `/api/status` just reads that already-computed answer instantly, instead of re-checking the disk on every request.
