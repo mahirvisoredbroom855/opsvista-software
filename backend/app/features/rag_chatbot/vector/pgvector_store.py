@@ -1,6 +1,17 @@
 """
 backend/app/features/rag_chatbot/vector/pgvector_store.py
 
+# ═══════════════════════════════════════════════════════════════════════
+# MODULE: [OPS:PVEC] — the pgvector fallback + audit-trail layer
+#
+# Every function here is independently tagged [OPS:PVEC-0NN] below. The
+# short version of what this module is for: a second retrieval path
+# (pgvector_search) that only fires when the primary in-memory index
+# [OPS:IDX] comes up empty or low-confidence, plus the audit-trail writes
+# (log_query, upsert_query_embedding, set_feedback) that make the
+# similar-questions feature and the /feedback endpoint real, not stubs.
+# ═══════════════════════════════════════════════════════════════════════
+
 The real pgvector-backed fallback path described in the RAG documentation's
 dual-path retrieval design (enhanced_index.json = primary, pgvector =
 fallback) and the Development Specification's Supabase schema
@@ -36,6 +47,22 @@ from .persisted_inmemory_search import embed_texts
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-001] _get_service_client() / is_configured() / get_service_client()
+#
+# WHAT: constructs a service-role Supabase client (bypasses Row Level
+#       Security — contrast with the anon-key client in auth_deps.py
+#       [OPS:AUTH-002], which enforces RLS for user-facing reads). Every
+#       other function in this module calls _get_service_client() itself
+#       rather than taking a client parameter, so is_configured() can be
+#       called cheaply and independently anywhere in the request path.
+# BREAKS IF: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing/placeholder
+#       — returns None rather than raising, which is what makes every
+#       pgvector function in this file degrade gracefully instead of
+#       500ing when Supabase isn't configured yet.
+# CALLED BY: every other function in this file; is_configured() also used
+#       directly by [OPS:CHAT-022] GET /status.
+# ─────────────────────────────────────────────────────────────────────────
 def _get_service_client():
     """Lazy import + construct so this module never fails to import even
     without Supabase configured, and always reads current env (not whatever
@@ -62,6 +89,16 @@ def get_service_client():
     return _get_service_client()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-002] _document_source_path() — the stable identity key used to
+#                 tie a document to the same dim_document row every time
+#
+# WHAT: Drive files use their immutable drive_file_id; local seed_docs
+#       files use "owner_folder/file_name" instead since they have no
+#       Drive ID. This exact key is what [OPS:PVEC-003] upsert_documents()
+#       upserts on and what [OPS:PVEC-005] log_query() re-derives to link
+#       citations back to the right document — the two must always agree.
+# ─────────────────────────────────────────────────────────────────────────
 def _document_source_path(metadata: Dict[str, Any]) -> str:
     """Stable unique key for a document, independent of source (Drive vs local)."""
     if metadata.get("drive_file_id"):
@@ -69,6 +106,25 @@ def _document_source_path(metadata: Dict[str, Any]) -> str:
     return f"{metadata.get('owner_folder', '')}/{metadata.get('file_name', 'unknown')}"
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-003] upsert_documents() — the dual-write path
+#
+# API/CALL: Supabase REST writes to dim_document / fact_chunk /
+#       fact_embedding (three tables per chunk); Gemini embed_content via
+#       [OPS:IDX-002] embed_texts() — only when a chunk doesn't already
+#       carry a precomputed vector.
+# WHY REUSE PRECOMPUTED VECTORS: this is called right after
+#       [OPS:IDX-004] PersistedInMemorySearch.ingest_documents() has
+#       already embedded the same chunks for the JSON index — re-embedding
+#       here would double the Gemini API cost/latency of every ingestion
+#       run for no benefit, since both paths need the identical vector.
+# CALLED BY: build_local_index.py [OPS:ING-002], build_drive_index.py
+#       [OPS:DRIVE-003] — right after the JSON index is (re)built, so
+#       pgvector's corpus never drifts out of sync with enhanced_index.json.
+# BREAKS IF: called with chunks whose IDs/order don't match what was just
+#       written to enhanced_index.json — the two stores would silently
+#       diverge until the next full rebuild.
+# ─────────────────────────────────────────────────────────────────────────
 def upsert_documents(documents: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Dual-write path: takes chunk dicts shaped like PersistedInMemorySearch's
@@ -192,6 +248,25 @@ def upsert_documents(documents: List[Dict[str, Any]]) -> Dict[str, Any]:
     return stats
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-004] pgvector_search() — the actual fallback query
+#
+# API/CALL: Gemini embed_content (via embed_texts(), a fresh embedding —
+#       not reused from the primary attempt); Postgres RPC match_chunks()
+#       (SCHEMA — see [OPS:SCHEMA-003] in backend/sql/schema.sql) — a
+#       cosine-similarity `<=>` scan over fact_embedding.embedding.
+# NUANCE: the embedding is passed as json.dumps(query_embedding) — a TEXT
+#       string, not Postgres's native VECTOR type — then cast ::vector
+#       inside the SQL function body. This works around unreliable
+#       PostgREST JSON-array→vector coercion when passed directly; see the
+#       ::vector cast in match_chunks()'s definition for the other half of
+#       this fix.
+# RETURNS: [{text, score, metadata}] — the exact shape [OPS:CHAT-005]
+#       _norm_one() already understands, so chat.py's retrieval code
+#       treats primary and fallback results identically downstream.
+# CALLED BY: [OPS:CHAT-008] _pgvector_retrieve() (via asyncio.to_thread,
+#       since this function is synchronous).
+# ─────────────────────────────────────────────────────────────────────────
 def pgvector_search(query: str, top_k: int = 4) -> List[Dict[str, Any]]:
     """
     Real fallback retrieval via Postgres/pgvector cosine similarity, called
@@ -237,6 +312,26 @@ def pgvector_search(query: str, top_k: int = 4) -> List[Dict[str, Any]]:
     return results
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-005] log_query() — audit-trail write, fact_query +
+#                 bridge_query_citation
+#
+# WHAT: one fact_query row per chat request (the question, timing, token
+#       counts, whether the fallback fired), plus one bridge_query_citation
+#       row per cited source — re-deriving each citation's document_id/
+#       chunk_id via the same (source_type, source_path) + chunk_index
+#       lookup keys that [OPS:PVEC-003] upsert_documents() wrote them
+#       under, so citations correctly link back even though `citations`
+#       only carries denormalized text/metadata, not real foreign keys.
+# CALLED BY: [OPS:CHAT-015] chat_complete(), [OPS:CHAT-020] chat_stream()
+#       (inside event_generator(), after the "done" SSE event) — always
+#       BEFORE [OPS:PVEC-006] upsert_query_embedding() for the same
+#       query_id, so a query is logged before it becomes findable.
+# BREAKS IF: fails silently and often — every DB call here is wrapped in
+#       its own try/except (one per citation, not just the outer
+#       function), specifically so one bad citation lookup doesn't lose
+#       the fact_query row or the other citations.
+# ─────────────────────────────────────────────────────────────────────────
 def log_query(
     *,
     query_id: str,
@@ -331,6 +426,24 @@ def log_query(
     return True
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-006] SIMILAR_QUERY_THRESHOLD + upsert_query_embedding() —
+#                 the write half of the "similar questions" feature
+#
+# WHAT: 0.80 is deliberately much stricter than RAG_QUALITY_THRESHOLD's
+#       0.5 [OPS:CHAT-009] — that threshold decides "is this chunk worth
+#       showing as a source," this one decides "are these two *questions*
+#       basically the same question," which is a much higher bar to avoid
+#       the UI implying a false relationship between unrelated queries.
+# CALLS: [OPS:IDX-002] embed_texts() — same shared embedding function as
+#       every other embed call in the system, so a query's own vector and
+#       a chunk's vector always live in the same space.
+# CALLED BY: [OPS:CHAT-015]/[OPS:CHAT-020], always AFTER log_query()
+#       [OPS:PVEC-005] for that same query_id — ordering matters: this is
+#       what keeps a query from ever appearing in its own similar-queries
+#       results (it isn't in fact_query_embedding yet when its own
+#       find_similar_queries() call runs).
+# ─────────────────────────────────────────────────────────────────────────
 # Below this cosine-similarity score, two questions are treated as
 # unrelated rather than "similar" — without a floor, match_queries() always
 # returns its top-N rows even when the closest one is barely related,
@@ -362,6 +475,24 @@ def upsert_query_embedding(query_id: str, query_text: str) -> bool:
         return False
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-007] find_similar_queries() — the read half of the "similar
+#                 questions" feature; the real metric behind that UI
+#
+# API/CALL: Gemini embed_content (query's own text); Postgres RPC
+#       match_queries() (SCHEMA — [OPS:SCHEMA-004]) — cosine similarity
+#       over fact_query_embedding, same TEXT→::vector cast pattern as
+#       match_chunks() [OPS:PVEC-004].
+# WHAT MAKES THIS A REAL METRIC, NOT A PLACEHOLDER: similarity is an
+#       actual cosine-similarity score against genuinely-logged prior
+#       questions, filtered by SIMILAR_QUERY_THRESHOLD [OPS:PVEC-006] —
+#       not a random/fabricated number. Returns [] (not a fake low
+#       number) whenever there's truly nothing to compare against.
+# CALLED BY: [OPS:CHAT-015] chat_complete(), [OPS:CHAT-020] chat_stream()
+#       — the result becomes the "similar_queries" field in
+#       ChatResponse / the SSE "meta" event, rendered by the
+#       SimilarQuestions component [OPS:FE-CHAT].
+# ─────────────────────────────────────────────────────────────────────────
 def find_similar_queries(
     query_text: str, top_k: int = 5, exclude_query_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
@@ -410,6 +541,15 @@ def find_similar_queries(
     return results
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-008] set_feedback() — thumbs up/down write
+#
+# WHAT: a single UPDATE on fact_query.user_rating keyed by query_id.
+#       `rating` is validated as exactly "up"/"down" upstream by
+#       FeedbackRequest's Literal type [OPS:CHAT-002] — this function
+#       trusts the caller rather than re-validating.
+# CALLED BY: [OPS:CHAT-021] submit_feedback() — the POST /feedback route.
+# ─────────────────────────────────────────────────────────────────────────
 def set_feedback(query_id: str, rating: str) -> bool:
     """
     Records a thumbs up/down on a previously-answered query by updating its
@@ -431,6 +571,28 @@ def set_feedback(query_id: str, rating: str) -> bool:
         return False
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# [OPS:PVEC-009] hydrate_index_from_supabase() — rebuild enhanced_index.json
+#                 from Supabase, no Drive re-scan, no re-embedding
+#
+# WHY THIS EXISTS: Render's free tier has ephemeral local disk — every
+#       restart/redeploy wipes enhanced_index.json off disk. Because
+#       [OPS:PVEC-003] upsert_documents() already dual-writes every chunk
+#       + embedding to Supabase at ingest time, the full JSON index is
+#       reconstructable purely from Postgres — no need to hit Google
+#       Drive or pay for re-embedding just because a process restarted.
+#       Verified for real this session by deleting the local index file
+#       and confirming automatic rebuild on the next startup.
+# MECHANICS: paginates fact_chunk (500 rows/page) joined to
+#       fact_embedding, reassembles the exact {"dim", "items": [{id,
+#       text, metadata, vector}]} shape [OPS:IDX-003]
+#       PersistedInMemorySearch._load_if_exists() expects for its legacy
+#       format branch.
+# CALLED BY: main.py's lifespan startup [OPS:MAIN-002] — only when no
+#       local index file exists yet; returns None (not an empty dict) so
+#       the caller can distinguish "nothing to hydrate" from "hydrated an
+#       empty index."
+# ─────────────────────────────────────────────────────────────────────────
 def hydrate_index_from_supabase() -> Optional[Dict[str, Any]]:
     """
     Rebuild the enhanced_index.json contents (the {"dim", "items"} shape
