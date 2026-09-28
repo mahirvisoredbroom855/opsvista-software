@@ -10,7 +10,7 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 <br/>
 
-<img src="screenshots/chat-answer.png" alt="OpsVista Chat — real answer with citations" width="850" />
+<img src="screenshots/login.png" alt="OpsVista Login" width="850" />
 
 <br/>
 
@@ -61,10 +61,8 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 ### Hosting
 
-![Render](https://img.shields.io/badge/Render_(live)-46E3B7?style=for-the-badge&logo=render&logoColor=white)
-![Vercel](https://img.shields.io/badge/Vercel_(planned)-000000?style=for-the-badge&logo=vercel&logoColor=white)
-
-> **Honesty check:** the backend is genuinely deployed and live on Render (verified: `GET /api/status` → `200`). The frontend has **not** been deployed to Vercel yet — it only runs locally so far (`npm run dev`). Vercel is the intended target (see [Deployment](#-deployment)), not a claim that it's already live.
+![Render](https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)
 
 <br/>
 
@@ -73,13 +71,12 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 | **Backend runtime** | Python 3.13, FastAPI, Uvicorn, Pydantic v2, `slowapi` (rate limiting) |
 | **Frontend** | Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS v4, `lucide-react`, `recharts`, `react-markdown` |
 | **Database, Auth & Vector Store** | Supabase — managed Postgres, Auth (JWT), Row Level Security, `pgvector` extension |
-| **LLM & Embeddings** | Google Gemini (`gemini-flash-lite-latest` generation, `gemini-embedding-001` embeddings) — primary; OpenAI supported as an alternate provider, not actively used |
+| **LLM & Embeddings** | Google Gemini (`gemini-flash-lite-latest` generation, `gemini-embedding-001` embeddings) — primary; OpenAI supported as an alternate provider |
 | **Document ingestion** | Google Drive API v3, `pypdf`, `python-docx`, `pandas` + `openpyxl` |
-| **Backend testing** | `pytest`, `pytest-asyncio`, `pytest-mock` — 27 tests (see [Testing](#-testing)) |
-| **Frontend testing** | `mocha` + `tsx` — 18 tests (see [Testing](#-testing)) |
+| **Testing** | `pytest` (backend, 27 tests) + `mocha` (frontend, 18 tests) — see [Testing](#-testing) |
 | **CI/CD** | GitHub Actions — lint/test/build on every push, nightly scheduled reindex |
-| **Dev tooling** | `scripts/check-env.js` — plain Node.js (no TypeScript build step needed for a one-off script), verifies required `.env`/`.env.local` vars before you try to run anything |
-| **Hosting** | Render — **live**; Vercel — **planned, not yet deployed** |
+| **Dev tooling** | `scripts/check-env.js` — plain Node.js, verifies required env vars before you run anything |
+| **Hosting** | Render (backend), Vercel (frontend) |
 
 ---
 
@@ -87,9 +84,9 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 - [🎯 Overview](#-overview)
 - [✨ Features](#-features)
-- [🛠️ Technology Stack](#️-technology-stack)
+- [▶️ Run Locally](#️-run-locally)
 - [🏗️ Architecture](#️-architecture)
-- [🚀 Getting Started](#-getting-started)
+- [🚀 Getting Started (fresh setup)](#-getting-started-fresh-setup)
 - [📁 Project Structure](#-project-structure)
 - [📡 API Reference](#-api-reference)
 - [🔄 Scheduled Reindexing](#-scheduled-reindexing)
@@ -105,40 +102,41 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 
 ## 🎯 Overview
 
-**OpsVista** replaces "dig through Google Drive folders yourself" with a chat assistant that actually knows the company's documents — finance records, HR policy, commercial orders, maintenance logs, admin procedures — and answers in plain English with **citations back to the real source file** so every answer is verifiable, not just plausible-sounding.
+**OpsVista** replaces "dig through Google Drive folders yourself" with a chat assistant that actually knows the company's documents — finance records, HR policy, commercial orders, maintenance logs, admin procedures — and answers in plain English with **citations back to the real source file**.
 
-### The knowledge base needs a "who/what/how" document, not just department records
+**How it works, simply:** documents in Google Drive get chunked and embedded → a question gets embedded the same way and matched against the closest chunks → an LLM (Gemini) writes an answer using only that retrieved context → the original chunks come back as citations. If the primary search comes back empty or low-confidence, a second independent Postgres/pgvector search gets a try — the **dual-path** design covered in detail in [Architecture](#️-architecture).
 
-Six department folders full of ledgers, policies, and logs answer *operational* questions fine — but none of them say who owns the company, what it actually manufactures, or how departments relate to each other. Ask "who owns PTIL?" against department records alone and the assistant has nothing to point to.
+### What this actually does, beyond a typical demo
 
-[`Monir Ahmed (Executive)/PTIL_Company_Overview.md`](<backend/seed_docs/Monir Ahmed (Executive)/PTIL_Company_Overview.md>) fixes that — one reference document covering ownership, business lines, org structure, and department heads, written explicitly to be the answer for identity/background questions rather than something the model has to infer from scattered mentions. It's chunked, embedded, and indexed exactly like every other document — no special-cased prompt, just a document that happens to answer a different kind of question.
-
-> **Deployment note:** this document is currently seeded into the local index and dual-written to Supabase, but it does **not** exist as a real file in Google Drive yet. A full Drive reindex (the nightly cron, or the dashboard's "Reindex now") rebuilds strictly from what's actually in Drive — so until this same file is uploaded to a real Drive folder named `Monir Ahmed (Executive)` (shared with the service account, matching the folder-name pattern in `FOLDER_DEPARTMENT_MAP`), the next full reindex will drop it. Do that once and it behaves exactly like every other department's documents from then on.
-
-### What makes it real (not a demo)
-
-- 🔀 **Genuine dual-path retrieval** — an in-memory vector index (primary) with a Postgres/pgvector fallback that activates on a real confidence + diversity quality gate, not just "zero results"
+- 🔀 **Dual-path retrieval** — primary vector index + a Postgres/pgvector fallback gated on confidence and source diversity, not just "zero results"
 - ⚡ **Token-by-token streaming** — Server-Sent Events, not a spinner-then-dump
-- 🔍 **Grounding transparency** — every answer shows *which* retrieval path answered, its confidence score, and source diversity — not hidden in a log somewhere
-- 👍 **Feedback loop** — thumbs up/down on every answer, persisted to the audit trail
-- 🌙 **"Everyday" freshness** — a nightly GitHub Actions cron re-scans Google Drive automatically; an Owner/Admin can also trigger it on demand from the dashboard
-- 📈 **Real observability** — every query logged (latency, confidence, tokens, fallback rate), rendered as an actual dashboard, not just server logs
-- 🔒 **Real RBAC** — Supabase Auth + role-gated admin endpoints, not a checkbox
+- 🔍 **Grounding transparency** — every answer shows which retrieval path answered, its confidence, and source diversity
+- 👍 **Feedback loop** — thumbs up/down persisted to the audit trail
+- 🌙 **Everyday freshness** — a nightly cron re-scans Google Drive automatically; an Owner/Admin can also trigger it on demand (cadence details in [Scheduled Reindexing](#-scheduled-reindexing))
+- 📈 **Observability dashboard** — every query logged (latency, confidence, tokens, fallback rate)
+- 🔒 **Role-based access** — Supabase Auth + role-gated admin endpoints
+
+### The knowledge base needed a "who/what/how" document, not just department records
+
+Six department folders full of ledgers, policies, and logs answer *operational* questions fine, but none of them said who owns the company, what it manufactures, or how departments relate to each other. [`Monir Ahmed (Executive)/PTIL_Company_Overview.md`](<backend/seed_docs/Monir Ahmed (Executive)/PTIL_Company_Overview.md>) fixes that: ownership, business lines, org structure, and department heads, in one reference document — chunked, embedded, and indexed exactly like everything else, no special-cased prompt.
+
+> **Caveat:** this file is seeded into the local index and Supabase, but not yet uploaded to a real Drive folder. A full Drive reindex rebuilds strictly from what's in Drive, so until the same file exists in a real `Monir Ahmed (Executive)` folder (shared with the service account), a full reindex will drop it. Details in [Google Drive Setup](#google-drive-setup).
 
 ---
 
 ## ✨ Features
 
-### 💬 Chat Experience
+### 💬 Chat — what each part of the widget shows
 
-- Natural-language Q&A grounded in your own documents, streamed live
-- 🗂️ **Salient department badges** — shown immediately under every answer (not hidden behind a click), so you know at a glance whether it drew on HR, Finance, Commercial, etc.
-- 📎 **A real "N sources" button** — a genuine clickable disclosure (not a disguised text link) that expands the full citation list: file name, department, Google Drive link, relevance score
-- 🔁 **"Similar questions asked before"** — a real cosine-similarity match against every previously-logged question (`fact_query_embedding` + a `match_queries()` pgvector RPC — same dual-path pattern as document retrieval, applied to query history), shown only when a genuine match clears an 80% similarity floor, never a fabricated number
-- 📊 **Auto-charted Excel citations** — spreadsheet-derived sources render as a real data table *and* a bar chart, with a magnitude filter so a tiny unit price doesn't get crushed next to a six-figure total
-- 🧭 **Retrieval trace panel** — which index answered (primary vs. pgvector fallback), confidence %, source diversity %
-- 👍👎 **Feedback buttons** on every answer
-- 🕐 **"Synced X ago" badge** — know at a glance how fresh the underlying knowledge base is
+| Element | What it shows | Why |
+|---|---|---|
+| 🗂️ Department badge | e.g. `HR · 4` — right under the answer | Know at a glance which department's documents fed the answer, without expanding anything |
+| 📎 "N sources" button | A real clickable toggle, not a disguised link | Expands the full citation list on demand: file name, department, Drive link, relevance score |
+| 🧭 Trace panel | Which index answered (primary vs. pgvector fallback), confidence %, source diversity % | Shows *how* the answer was found, not just what it cited |
+| 🔁 "Similar questions" | Prior questions whose embedding clears an 80% cosine-similarity match against this one | Real signal from `fact_query_embedding` + a `match_queries()` pgvector RPC — same dual-path pattern as document retrieval, applied to query history. Empty means genuinely no similar question yet, not a broken feature |
+| 👍👎 Feedback | Thumbs up/down on the answer | Persisted to `fact_query.user_rating` |
+| 🕐 "Synced X ago" badge | Age of the underlying index | Know if the knowledge base might be stale before trusting an answer |
+| 📊 Excel citation charts | Spreadsheet-derived sources render as a table *and* a bar chart | A magnitude filter drops columns on a wildly different scale (e.g. unit price vs. total value) so one series doesn't get visually crushed |
 
 <br/>
 <img src="screenshots/chat-sources.png" alt="Citations, trace panel, and feedback buttons" width="850" />
@@ -149,42 +147,46 @@ Six department folders full of ledgers, policies, and logs answer *operational* 
 - Email/password signup with name + email confirmation flow
 - Session-gated chat access for any employee
 - **Owner/Admin-only** observability dashboard and reindex controls
-- Real sign-out everywhere — chat page *and* dashboard (no dead-end sessions)
-
-<br/>
-<img src="screenshots/login.png" alt="Login screen" width="850" />
-<br/>
+- Sign-out on both the chat page and the dashboard
 
 ### 📊 Observability Dashboard
 
-- Query volume, avg/p95 latency, fallback rate, avg confidence, token usage — all real, all from Supabase
+- Query volume, avg/p95 latency, fallback rate, avg confidence, token usage
 - Top cited documents & departments, ranked
 - Recent query log with latency/confidence/fallback/tokens per row
-- 🔁 **"Reindex now"** button — triggers a real Google Drive re-scan with live progress polling
+- "Reindex now" button with live progress polling
 
 <br/>
 <img src="screenshots/dashboard.png" alt="Observability dashboard" width="850" />
 <br/>
 
-### 🔄 Keeping the Knowledge Base Fresh
-
-- Admin-triggered reindex API (`POST /api/rag/admin/reindex`) — full Drive re-scan + re-embed + dual-write, with automatic timestamped backups
-- **Nightly scheduled reindex** via GitHub Actions — runs automatically, no human required
-- Ephemeral-disk safety — if the local index file goes missing on a redeploy (Render free tier wipes disk), it auto-rehydrates from Supabase on startup
-
 ---
+
+## ▶️ Run Locally
+
+If you're working from an existing checkout of this repo (env vars, index, and Supabase already configured — not a fresh clone), this is all you need:
+
+```bash
+# Terminal 1 — backend
+cd backend && source ../.venv/bin/activate && uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 — frontend
+cd frontend && npm run dev
+```
+
+Then open **http://localhost:3000**. Sign in with your own account, or **"Create one"** on the login screen if you don't have one yet — new signups have no admin role by default, so the dashboard/reindex button will 403 until an Owner grants one (see [Security](#-security) for the exact command).
+
+Not sure your `.env` / `frontend/.env.local` are actually filled in? Run the sanity check first:
+
+```bash
+node scripts/check-env.js
+```
+
+Setting this up from scratch (new clone, new Supabase project) is a longer process — see [Getting Started](#-getting-started-fresh-setup) below.
 
 ---
 
 ## 🏗️ Architecture
-
-### How it works (plain English)
-
-1. Company documents (Excel, Word, PDF, Markdown) live in Google Drive, organized by department.
-2. A background process reads them, chunks them, and converts each chunk into a vector embedding.
-3. A question gets embedded the same way and matched against the most semantically similar chunks.
-4. Those chunks go to Gemini, which writes an answer **using only that retrieved context** — the original chunks come back as citations.
-5. If the primary search comes back empty or low-confidence, an independent Postgres/pgvector search gets a second try — the **dual-path** design.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -220,9 +222,17 @@ Six department folders full of ledgers, policies, and logs answer *operational* 
   <img src="pictures/High-Level%20System%20Architecture%20(E2E).png" alt="High-Level Architecture" width="88%">
 </p>
 
-### Dual-path retrieval trace
+**What this shows:** the four layers above — client, API, dual-path retrieval, and the two external stores (Supabase, Google Drive) — matches the real system as-is.
 
-Every response carries a real `trace` object:
+### Retrieval decision flow
+
+<p align="center">
+  <img src="pictures/Retrieval%20Decision%20Flow%20(Strict).png" alt="Retrieval Decision Flow" width="70%">
+</p>
+
+**What this shows:** primary index search, falling back to pgvector when it comes up empty.
+
+**Detail:** the real implementation (`retrieve_with_trace()` in `chat.py`) also falls back on *low confidence*, not just zero results, and scores source diversity alongside confidence. Every response's `trace` object reflects this:
 
 ```json
 {
@@ -233,19 +243,55 @@ Every response carries a real `trace` object:
 }
 ```
 
-<p align="center">
-  <img src="pictures/Retrieval%20Decision%20Flow%20(Strict).png" alt="Retrieval Decision Flow" width="70%">
-</p>
-
-> **Diagram note:** shows the original binary "has hits?" design. The real implementation (`retrieve_with_trace()` in `chat.py`) is a superset — it adds confidence-threshold and source-diversity scoring on top of this same fallback structure.
-
-### Full request sequence
+### Chat request sequence
 
 <p align="center">
   <img src="pictures/Chat%20Request%20Sequence%20(Alt%20paths%20shown).png" alt="Chat Request Sequence" width="90%">
 </p>
 
-> **Diagram note:** the fallback box (`IntegratedSearchManager`) is from an earlier design — the real fallback is `pgvector_store.py`, and Gemini is primary (OpenAI is the alternate, not the reverse).
+**What this shows:** the request path through retrieval, generation, and the fallback branch.
+
+**Detail — current implementation** (the picture predates streaming, similar-questions, and the query-embedding write, and shows OpenAI where Gemini is now primary; picture left as-is per the standing "don't touch existing diagrams" policy, so here's the accurate flow as text):
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API as FastAPI (/chat/stream)
+    participant Primary as Enhanced Index (JSON, primary)
+    participant Fallback as pgvector (Supabase)
+    participant LLM as Gemini
+    participant DB as Supabase (audit tables)
+
+    Client->>API: POST /api/rag/chat/stream {message, top_k}
+    API->>Primary: search(query, top_k)
+    Primary-->>API: docs + confidence
+
+    alt confidence >= 0.5 (RAG_QUALITY_THRESHOLD)
+        Note over API: use primary docs as-is
+    else confidence < 0.5 or zero results
+        API->>Fallback: match_chunks(embedding, top_k)
+        Fallback-->>API: fallback docs
+    end
+
+    API->>DB: find_similar_queries(message) [best-effort]
+    DB-->>API: similar_queries[] (only if similarity >= 0.80, else [])
+
+    API-->>Client: SSE meta {chat_id, sources, trace, warnings, similar_queries}
+
+    API->>LLM: stream_with_messages(prompt + context)
+    loop each streamed chunk
+        LLM-->>API: text delta
+        API-->>Client: SSE token {content}
+    end
+    opt generation fails
+        API-->>Client: SSE error {message}
+    end
+
+    API-->>Client: SSE done {model, usage, processing_time_ms}
+
+    API->>DB: log_query() -> fact_query + bridge_query_citation
+    API->>DB: upsert_query_embedding(chat_id, message) -> fact_query_embedding
+```
 
 ### Data model
 
@@ -253,7 +299,62 @@ Every response carries a real `trace` object:
   <img src="pictures/Data%20Shape%20(ER)%20for%20Enhanced%20Index%20+%20Metadata.png" alt="Data Shape" width="68%">
 </p>
 
-> Predates two tables that now exist for real (`fact_query`, `bridge_query_citation`). **[`backend/sql/schema.sql`](backend/sql/schema.sql) is the authoritative, executable schema.**
+**What this shows:** documents chunked into embeddings.
+
+**Detail — current schema** (the picture predates `fact_query`, `bridge_query_citation`, and `fact_query_embedding`, which now exist for real; **[`backend/sql/schema.sql`](backend/sql/schema.sql) is the authoritative, executable source**):
+
+```mermaid
+erDiagram
+    DIM_DOCUMENT ||--o{ FACT_CHUNK : contains
+    FACT_CHUNK ||--|| FACT_EMBEDDING : has
+    FACT_CHUNK ||--o{ BRIDGE_QUERY_CITATION : cited_in
+    DIM_DOCUMENT ||--o{ BRIDGE_QUERY_CITATION : referenced_by
+    FACT_QUERY ||--o{ BRIDGE_QUERY_CITATION : cites
+    FACT_QUERY ||--|| FACT_QUERY_EMBEDDING : has
+
+    DIM_DOCUMENT {
+        uuid document_id PK
+        text source_type
+        text source_path
+        text title
+        text department
+        boolean is_active
+    }
+    FACT_CHUNK {
+        uuid chunk_id PK
+        uuid document_id FK
+        int ordinal
+        text text
+        jsonb metadata
+    }
+    FACT_EMBEDDING {
+        uuid chunk_id PK_FK
+        text model
+        int dim
+        vector embedding
+    }
+    FACT_QUERY {
+        uuid query_id PK
+        uuid user_id
+        text query_text
+        boolean used_fallback
+        numeric retrieval_confidence
+        int total_tokens
+        text user_rating
+        timestamptz created_at
+    }
+    FACT_QUERY_EMBEDDING {
+        uuid query_id PK_FK
+        vector embedding
+    }
+    BRIDGE_QUERY_CITATION {
+        uuid query_id PK_FK
+        uuid document_id FK
+        uuid chunk_id FK
+        numeric relevance_score
+        int rank
+    }
+```
 
 | Table | Purpose |
 |---|---|
@@ -261,16 +362,18 @@ Every response carries a real `trace` object:
 | `fact_chunk` | Text chunks, ordinal position, full metadata (JSONB) |
 | `fact_embedding` | The actual `vector(1536)` embeddings |
 | `fact_query` | Audit log: every question, confidence, latency, tokens, fallback flag, user rating |
-| `fact_query_embedding` | Each question's own `vector(1536)` — powers "similar questions asked before" via `match_queries()` |
+| `fact_query_embedding` | Each question's own `vector(1536)` — powers "similar questions" |
 | `bridge_query_citation` | Which chunks were cited for which query, ranked |
 
-**Why 1536 dims, not Gemini's native 3072?** `pgvector`'s `ivfflat`/`hnsw` indexes cap at 2000 dimensions. Gemini supports requesting a smaller output directly via `output_dimensionality=1536`.
+**Why 1536 dims, not Gemini's native 3072?** `pgvector`'s `ivfflat`/`hnsw` indexes cap at 2000 dimensions; Gemini supports requesting a smaller output directly via `output_dimensionality=1536`.
 
-**Why no ANN index on `fact_embedding` right now?** `ivfflat` needs ~`rows/1000` clusters to behave well. At a few hundred rows that's ~0–1 clusters — it made retrieval *worse* in testing. Exact search is both more accurate and fast enough below ~1,000–10,000 rows.
+**Why no ANN index on `fact_embedding` yet?** `ivfflat` needs ~`rows/1000` clusters to behave well — at a few hundred rows that's ~0–1 clusters, which made retrieval *worse* in testing. Exact search is both more accurate and fast enough below ~1,000–10,000 rows.
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Getting Started (fresh setup)
+
+Setting this up from a brand new clone. If you already have a working checkout, see [Run Locally](#️-run-locally) instead.
 
 ### Prerequisites
 
@@ -310,10 +413,10 @@ USE_MOCK_EMBEDDINGS=false             # true = deterministic hash vectors, zero 
 GOOGLE_DRIVE_CREDENTIALS_PATH=backend/credentials/google_credentials.json
 CORS_ALLOWED_ORIGINS=http://localhost:3000
 
-REINDEX_AUTOMATION_TOKEN=...          # optional — enables the nightly cron trigger (see below)
+REINDEX_AUTOMATION_TOKEN=...          # optional — enables the nightly cron trigger
 ```
 
-Then run `backend/sql/schema.sql` once in your Supabase project's SQL Editor — on a **fresh** project only, since it starts with `DROP TABLE`. If you already have a live project with real data, run this non-destructive migration instead to pick up the `fact_query_embedding` table + `match_queries()` function (the "similar questions" feature) without touching anything else:
+Run `backend/sql/schema.sql` once in your Supabase SQL Editor — on a **fresh** project only, since it starts with `DROP TABLE`. On an existing project with real data, run this non-destructive migration instead (adds the `fact_query_embedding` table + `match_queries()` function behind "similar questions" without touching anything else):
 
 ```sql
 CREATE TABLE IF NOT EXISTS fact_query_embedding (
@@ -351,7 +454,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 NEXT_PUBLIC_REQUIRE_AUTH=true
 ```
 
-Sanity-check both files before going further:
+Sanity-check both files:
 
 ```bash
 node scripts/check-env.js
@@ -366,7 +469,7 @@ cd backend
 python build_local_index.py --reset
 ```
 
-Have a real Drive service account set up? See [Google Drive Setup](#google-drive-setup) below, then:
+Have a real Drive service account set up? See [Google Drive Setup](#google-drive-setup), then:
 
 ```bash
 python build_drive_index.py --reset
@@ -377,21 +480,18 @@ Either script dual-writes into Supabase automatically.
 ### 4. Run it
 
 ```bash
-# Terminal 1 — backend
-cd backend && uvicorn app.main:app --reload --port 8000
-
-# Terminal 2 — frontend
-cd frontend && npm run dev
+cd backend && uvicorn app.main:app --reload --port 8000     # terminal 1
+cd frontend && npm run dev                                   # terminal 2
 ```
 
-Visit `http://localhost:3000`, sign up (or sign in), and start asking questions.
+Visit `http://localhost:3000`, sign up, and start asking questions.
 
 ### Google Drive Setup
 
 1. **Google Cloud Console** → new project → enable the **Google Drive API**.
 2. **APIs & Services → Credentials** → Create Credentials → **Service Account** → create a key (JSON) → save as `backend/credentials/google_credentials.json` (already gitignored).
-3. Create one parent Drive folder containing your department subfolders, and **share only that parent folder** with the service account's email — permissions cascade automatically. Subfolder names must match (as a substring) an entry in `FOLDER_DEPARTMENT_MAP` (`backend/app/features/rag_chatbot/ingestion_common.py`) — currently `Riaz Uddin Sarker`, `Md. Mizanur Rahman (PTIL)`, `Khorshed Alam Babu`, `Md. Mozammel Haque`, `Zahedul Islam Nizam`, `Md. Alamin`, and `Monir Ahmed`, mapped to Admin/Finance/Maintenance/HR/Accounting/Commercial/Executive respectively.
-4. Upload documents. Supported: Google Docs, `.pdf`, `.docx`, `.xlsx`, `.txt`, `.md`. Make sure a `Monir Ahmed (Executive)` folder exists containing [`PTIL_Company_Overview.md`](<backend/seed_docs/Monir Ahmed (Executive)/PTIL_Company_Overview.md>) — otherwise a full reindex won't have a company-identity document to fall back on (see the callout in [Overview](#-overview)).
+3. Create one parent Drive folder containing your department subfolders, and **share only that parent folder** with the service account's email — permissions cascade automatically. Subfolder names must match (as a substring) an entry in `FOLDER_DEPARTMENT_MAP` (`backend/app/features/rag_chatbot/ingestion_common.py`): `Riaz Uddin Sarker` → Admin, `Md. Mizanur Rahman (PTIL)` → Finance, `Khorshed Alam Babu` → Maintenance, `Md. Mozammel Haque` → HR, `Zahedul Islam Nizam` → Accounting, `Md. Alamin` → Commercial, `Monir Ahmed` → Executive.
+4. Upload documents. Supported: Google Docs, `.pdf`, `.docx`, `.xlsx`, `.txt`, `.md`. Include a `Monir Ahmed (Executive)` folder with [`PTIL_Company_Overview.md`](<backend/seed_docs/Monir Ahmed (Executive)/PTIL_Company_Overview.md>) — otherwise a full reindex has no company-identity document to fall back on.
 5. Run `python build_drive_index.py --reset` (or trigger `POST /api/rag/admin/reindex` from an Owner/Admin session).
 
 ---
@@ -423,7 +523,7 @@ opsvista-software/
 │   │       └── ingestion_common.py          # Shared chunking/extraction (PDF/DOCX/XLSX/TXT/MD)
 │   ├── build_local_index.py                 # Build index from a local folder (no Drive/API key needed)
 │   ├── build_drive_index.py                 # Build index from real Google Drive
-│   ├── sql/schema.sql                        # Full Supabase schema, RLS, match_chunks() RPC
+│   ├── sql/schema.sql                        # Full Supabase schema, RLS, match_chunks() + match_queries() RPCs
 │   ├── tests/                                # 27 pytest tests, mock embeddings, no network calls
 │   └── seed_docs/                            # Realistic dummy PTIL documents (Excel/Word/PDF/MD)
 │       └── Monir Ahmed (Executive)/          # Company Overview — who/what/how, not operational records
@@ -509,9 +609,9 @@ Interactive OpenAPI docs are always available at `/docs` on a running backend.
 }
 ```
 
-`warnings[]` is populated when: no documents were found, the fallback path was used, the fallback was attempted but also came up empty, or context was truncated to fit `MAX_CONTEXT_TOKENS` (default `6000`).
+`warnings[]`: populated when no documents were found, the fallback path was used, the fallback also came up empty, or context was truncated to fit `MAX_CONTEXT_TOKENS` (default `6000`).
 
-`similar_queries[]` only ever contains prior questions whose cosine similarity against this one clears `SIMILAR_QUERY_THRESHOLD` (default `0.80`) — an empty array means genuinely no similar question has been asked yet, not a broken feature.
+`similar_queries[]`: only contains prior questions whose similarity clears `SIMILAR_QUERY_THRESHOLD` (default `0.80`) — empty means no similar question has been logged yet.
 
 <p align="center">
   <img src="pictures/Response%20Assembly%20(What%20the%20API%20returns).png" alt="Response Assembly" width="80%">
@@ -521,15 +621,15 @@ Interactive OpenAPI docs are always available at `/docs` on a running backend.
 
 ## 🔄 Scheduled Reindexing
 
-Editing or adding a file in Google Drive doesn't propagate automatically by itself — ingestion is a full rescan, triggered either manually or on a schedule:
+Editing or adding a file in Google Drive doesn't propagate by itself — ingestion is a full rescan, triggered manually or on a schedule.
 
-| Trigger | How |
-|---|---|
-| **Nightly (automatic)** | GitHub Actions cron (`.github/workflows/scheduled-reindex.yml`), 03:00 UTC daily |
-| **On demand (admin)** | "Reindex now" button in the dashboard, or `POST /api/rag/admin/reindex` |
-| **On demand (CLI)** | `python build_drive_index.py --reset` |
+| Trigger | Cadence | How |
+|---|---|---|
+| **Automatic** | Nightly, 03:00 UTC | GitHub Actions cron (`.github/workflows/scheduled-reindex.yml`) |
+| **On demand (admin)** | Whenever clicked | "Reindex now" button in the dashboard, or `POST /api/rag/admin/reindex` |
+| **On demand (CLI)** | Whenever run | `python build_drive_index.py --reset` |
 
-The cron job authenticates with a static `X-Automation-Token` header instead of a Supabase session — set `REINDEX_AUTOMATION_TOKEN` the same on your backend and as `REINDEX_AUTOMATION_TOKEN`/`BACKEND_URL` GitHub Actions secrets. Disabled entirely unless that env var is set.
+The cron job authenticates with a static `X-Automation-Token` header instead of a Supabase session — set `REINDEX_AUTOMATION_TOKEN` identically on the backend and as GitHub Actions secrets (`REINDEX_AUTOMATION_TOKEN`, `BACKEND_URL`). This path is disabled entirely unless that env var is set.
 
 A timestamped backup of the previous index is kept automatically (`backend/app/features/rag_chatbot/vector/backups/`, last 5 retained) before every reset.
 
@@ -537,12 +637,12 @@ A timestamped backup of the previous index is kept automatically (`backend/app/f
 
 ## 📊 Observability
 
-Every chat request writes a row to `fact_query` (confidence, latency, tokens, fallback flag, user rating) and `bridge_query_citation` (which chunks were cited, ranked) — real, queryable data.
+Every chat request writes a row to `fact_query` (confidence, latency, tokens, fallback flag, user rating) and `bridge_query_citation` (which chunks were cited, ranked).
 
 Three ways to look at it:
 1. **The dashboard** — `/dashboard` (Owner/Admin): query volume, latency, fallback rate, token usage, top cited documents/departments, recent query log, reindex control
 2. **Supabase Studio** — Table Editor on `fact_query` / `bridge_query_citation`
-3. **Backend logs** — `tail -f` your uvicorn output; Render's built-in log viewer shows the same on deploy
+3. **Backend logs** — `tail -f` your uvicorn output; Render's log viewer shows the same on deploy
 
 <p align="center">
   <img src="pictures/Health%20%26%20Diagnostics%20(Cheap%20Observability).png" alt="Health & Diagnostics" width="70%">
@@ -553,11 +653,11 @@ Three ways to look at it:
 ## 🔐 Security
 
 - **Auth**: Supabase Auth (email/password), JWTs verified server-side against Supabase's own Auth API
-- **RBAC**: `require_roles(["Owner", "Admin"])` gates the admin dashboard and reindex trigger:
+- **RBAC**: `require_roles(["Owner", "Admin"])` gates the admin dashboard and reindex trigger. Grant a role:
   ```python
   supabase.auth.admin.update_user_by_id(user_id, {"app_metadata": {"role": "Owner"}})
   ```
-- **Row Level Security**: enabled on all 5 tables — corpus tables readable by any authenticated user, writable only via the service-role key
+- **Row Level Security**: enabled on all 6 tables — corpus tables readable by any authenticated user, writable only via the service-role key
 - **Rate limiting**: per-IP via `slowapi` — 20/min chat, 60/min metrics, 3/min reindex, 120/min global default
 - **Secrets**: service-role keys, JWT secrets, Drive credentials, and the reindex automation token are never committed — see `.gitignore`
 
@@ -565,60 +665,28 @@ Three ways to look at it:
 
 ## 🧪 Testing
 
-| Suite | Framework | Tests | What it needs |
+| Suite | Framework | Tests | Needs |
 |---|---|---|---|
-| Backend | `pytest` + `pytest-asyncio` + `pytest-mock` | 27 | Nothing external — mock embeddings, no network calls, no API cost |
-| Backend (boot check) | plain `python -c "import app.main"` | 1 | Catches missing deps `pytest` alone wouldn't (see below) |
-| Frontend | `mocha` + `tsx` | 18 | Nothing external — pure functions only, no DOM/browser needed |
+| Backend | `pytest` + `pytest-asyncio` + `pytest-mock` | 27 | Nothing external — mock embeddings, no network calls |
+| Backend (boot check) | `python -c "import app.main"` | 1 | Catches missing deps pytest alone wouldn't (see below) |
+| Frontend | `mocha` + `tsx` | 18 | Nothing external — pure functions only |
 | Frontend (lint) | `biome check` | — | Nothing external |
 | Frontend (build) | `next build` | — | Type-checks the whole app |
 
-Run everything locally exactly as CI does:
+Run everything exactly as CI does:
 
 ```bash
-# Backend
 cd backend && pip install -r requirements-test.txt && pytest -v
-
-# Frontend
 cd frontend && npm run lint && npm run test && npm run build
 ```
 
-### Backend — pytest (27 tests)
+**Backend coverage:** `ingestion_common.py` (chunking, PDF/DOCX/XLSX extraction against real generated fixtures), `persisted_inmemory_search.py` (ingest/search/persist round trips), `chat.py` (quality-gate logic and dual-path branching), `pgvector_store.py` (config-detection logic).
 
-```bash
-cd backend
-pip install -r requirements-test.txt
-pytest -v
-```
+**Frontend coverage:** the pure functions in `src/lib/chatUtils.ts` — numeric-column detection, chartable-column selection (the magnitude filter behind auto-charted Excel citations), relative-time formatting.
 
-Mock embeddings throughout (no network calls, no API cost). Covers:
-- `ingestion_common.py` — chunking, PDF/DOCX/XLSX extraction against real generated fixtures
-- `persisted_inmemory_search.py` — ingest/search/persist round trips
-- `chat.py` — quality-gate logic (`_retrieval_confidence`, `_source_diversity`, `_enforce_token_budget`), dual-path branching
-- `pgvector_store.py` — config-detection logic
+**Why the boot check exists:** `pytest` never imports `app.main`, so a dependency missing only at boot time can pass every test and still crash the real server. This happened once already (`slowapi` was undeclared in `requirements.txt`) — the smoke-import step in CI catches exactly that class of bug now.
 
-A smoke-import test also runs in CI (`python -c "import app.main"`) — pytest alone never exercises `app.main`, so a missing dependency used only at boot can pass tests and still crash the real server. This exact scenario happened once already (`slowapi` was undeclared) and is why the check exists.
-
-### Frontend — Mocha (18 tests)
-
-```bash
-cd frontend
-npm run test
-```
-
-Covers the pure functions in `src/lib/chatUtils.ts`: numeric-column detection, chartable-column selection (the magnitude-filter logic behind auto-charted Excel citations), relative-time formatting.
-
-### Frontend — lint & build
-
-```bash
-cd frontend
-npm run lint     # biome check
-npm run build    # next build (also type-checks)
-```
-
-### CI
-
-Both suites run automatically on every push via [`.github/workflows/ci.yml`](.github/workflows/ci.yml) — lint, pytest, Mocha, and a production build, so nothing merges silently broken.
+Both suites run automatically on every push via [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ---
 
@@ -628,7 +696,9 @@ Both suites run automatically on every push via [`.github/workflows/ci.yml`](.gi
   <img src="pictures/Infrastructure%20Runtime%20Topology.png" alt="Infrastructure Topology" width="80%">
 </p>
 
-> Diagram shows "OpenAI API" — Gemini is primary now (OpenAI is the alternate). Everything else matches: Vercel → Render/Uvicorn → FastAPI → Chat Router → Supabase / LLM provider / Google Drive / local index file.
+**What this shows:** Vercel → Render/Uvicorn → FastAPI → Chat Router → Supabase / LLM provider / Google Drive / local index file.
+
+**Detail:** the diagram labels the LLM box "OpenAI API" — Gemini is primary now, OpenAI is the alternate. Everything else matches.
 
 ### Backend → Render
 
@@ -638,7 +708,7 @@ A [`render.yaml`](render.yaml) Blueprint is included — **New → Blueprint** i
 - **Start command**: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 - **Health check**: `/api/status`
 - Fill in the `sync: false` secrets in the dashboard (Render never reads secret values from the repo)
-- For the admin-triggered reindex to work in production, upload `google_credentials.json` via Render's **Secret Files** feature — without it, chat still works (index hydrates from Supabase on boot), only a *fresh Drive scan* needs it
+- For the admin-triggered reindex to work in production, upload `google_credentials.json` via Render's **Secret Files** feature — without it, chat still works (index hydrates from Supabase on boot), only a fresh Drive scan needs it
 
 ### Frontend → Vercel
 
@@ -662,6 +732,14 @@ Add `BACKEND_URL` and `REINDEX_AUTOMATION_TOKEN` as GitHub Actions repository se
 
 ## 🖼️ Screenshots
 
+### Login
+
+![Login](screenshots/login.png)
+
+### Empty chat state
+
+![Empty chat](screenshots/chat-empty.png)
+
 ### Chat — real answer, citations, trace panel
 
 ![Chat with answer](screenshots/chat-answer.png)
@@ -674,13 +752,15 @@ Add `BACKEND_URL` and `REINDEX_AUTOMATION_TOKEN` as GitHub Actions repository se
 
 ![Dashboard](screenshots/dashboard.png)
 
-### Login
+### Observability Dashboard — query volume, latency, top cited documents & departments
 
-![Login](screenshots/login.png)
+![Dashboard charts and rankings](screenshots/chatdashbaord2.png)
 
-### Empty chat state
+### Observability Dashboard — recent query history
 
-![Empty chat](screenshots/chat-empty.png)
+![Recent query history](screenshots/chat_people_queryhistory.png)
+
+> **In-chat "similar questions asked before" widget pending** — that specific feature (the one inside a chat answer, not the dashboard's query history above) needs the `fact_query_embedding` migration (in [Getting Started](#-getting-started-fresh-setup)) run against Supabase first; until then it has no data to render. Happy to capture it the moment that's applied.
 
 ---
 
