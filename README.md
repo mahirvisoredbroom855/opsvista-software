@@ -11,6 +11,7 @@ Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, buil
 <br/>
 
 <img src="screenshots/login.png" alt="OpsVista Login" width="850" />
+<img src="screenshots/chat-answer.png" alt="OpsVista Login" width="850" />
 
 <br/>
 
