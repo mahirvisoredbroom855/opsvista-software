@@ -1,0 +1,29 @@
+flowchart TB
+    Employee(["👤 Employee"])
+    Drive[("📁 Google Drive<br/>documents")]
+
+    subgraph Ingestion["Ingestion — nightly or on-demand"]
+        BuildIndex["build_drive_index.py<br/>scan, chunk, embed"]
+        Primary[("Primary Index<br/>local JSON file")]
+        Supabase[("Supabase / pgvector<br/>backup copy")]
+    end
+
+    subgraph ChatFlow["Chat — every question"]
+        Frontend["Chat UI"]
+        Backend["Backend API"]
+        LLM["LLM<br/>Gemini / OpenAI"]
+    end
+
+    Drive --> BuildIndex
+    BuildIndex --> Primary
+    BuildIndex --> Supabase
+
+    Employee --> Frontend
+    Frontend --> Backend
+    Backend --> Primary
+    Primary -.->|"low confidence<br/>fallback"| Supabase
+    Primary --> LLM
+    Supabase --> LLM
+    LLM --> Backend
+    Backend --> Frontend
+    Frontend --> Employee

@@ -1,0 +1,85 @@
+sequenceDiagram
+    autonumber
+    actor User
+    participant UI as Chat UI (page.tsx)
+    participant API as Backend /stream (chat.py)
+    participant Auth as Supabase Auth
+    participant Primary as Primary Index (JSON, in-memory)
+    participant Embed as Embedding provider (Gemini/OpenAI)
+    participant PGV as Supabase / pgvector
+    participant LLM as LLM provider (Gemini/OpenAI)
+    participant Audit as Supabase audit tables
+
+    User->>UI: types question, hits Send
+    UI->>API: POST /api/rag/chat/stream<br/>{message, top_k}, Bearer token (if logged in)
+    Note over API: rate limit check (20/min)
+
+    opt Authorization header present
+        API->>Auth: get_current_user_optional() → verify token
+        Auth-->>API: user (or none — never blocks this endpoint)
+    end
+
+    Note over API: retrieve_with_trace() — the one function<br/>every question passes through
+
+    API->>Primary: _enhanced_retrieve(query, top_k)
+    Primary->>Embed: embed_texts([query])
+    Embed-->>Primary: query embedding (numbers)
+    Primary->>Primary: cosine similarity vs. in-memory vectors
+    Primary-->>API: top_k chunks + confidence score
+
+    API->>API: compare confidence to RAG_QUALITY_THRESHOLD (0.5)
+
+    alt confidence too low, or nothing found
+        API->>PGV: _pgvector_retrieve(query, top_k)
+        API->>Embed: embed_texts([query])
+        Embed-->>API: query embedding
+        API->>PGV: pgvector_search() → RPC match_chunks()
+        PGV->>PGV: cosine similarity search (SQL function)
+        PGV-->>API: matched chunks (or empty)
+        alt pgvector found something
+            API->>API: replace results, used_fallback = true
+        else pgvector also empty
+            API->>API: keep original weak result — something beats nothing
+        end
+    else confidence good enough
+        API->>API: use primary result as-is
+    end
+
+    API->>API: chat_id = new UUID, build source cards
+    API->>PGV: find_similar_queries(query) → RPC match_queries()
+    PGV-->>API: similar past questions (best-effort, ok if empty)
+
+    API-->>UI: SSE event "meta"<br/>{chat_id, sources, trace, similar_queries}
+    UI->>UI: render department badges + trace panel (path used, confidence)
+
+    API->>API: _build_context_texts(docs)
+    API->>API: _enforce_token_budget() — trim to fit MAX_CONTEXT_TOKENS
+    opt context had to be trimmed
+        API-->>UI: SSE event "warning"
+    end
+
+    API->>API: get_prompt_for_query() → system + user messages
+    API->>API: LLMClient() picks OpenAI (if key set) else Gemini
+
+    API->>LLM: stream_with_messages(messages)
+    loop each generated chunk
+        LLM-->>API: next piece of text
+        API-->>UI: SSE event "token" {content}
+        UI->>UI: append chunk, answer types itself on screen
+    end
+
+    API->>API: estimate token usage, processing_time_ms
+    API-->>UI: SSE event "done" {model, usage, processing_time_ms}
+    UI->>User: full answer shown, with sources + trace + feedback buttons
+
+    par best-effort, after response already sent
+        API->>Audit: log_query() — writes fact_query + citation rows
+    and
+        API->>Audit: upsert_query_embedding() — stores this question for future "similar questions"
+    end
+
+    opt user rates the answer
+        User->>UI: clicks 👍 / 👎
+        UI->>API: POST /api/rag/chat/feedback {query_id, rating}
+        API->>Audit: set_feedback() → updates fact_query.user_rating
+    end
