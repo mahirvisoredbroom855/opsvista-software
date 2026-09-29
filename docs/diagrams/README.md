@@ -38,3 +38,9 @@ on GitHub itself).
   registering middleware/routers, the startup index check), and what
   happens on every single request afterward (rate limiter → CORS → route
   matching → auth dependencies → the actual handler function).
+- **`api-endpoint-map.mmd`** — every real API endpoint in the app, grouped
+  by the file it lives in, next to who actually calls it (which frontend
+  page, or the nightly GitHub Action) and what it touches downstream
+  (the primary index, Supabase/pgvector, the LLM, Google Drive). One map
+  covering all 12 routes at once, instead of jumping between files to
+  piece it together.

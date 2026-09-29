@@ -1,0 +1,76 @@
+flowchart LR
+    subgraph Callers["Who calls what"]
+        ChatUI["Chat UI<br/>frontend/src/app/page.tsx"]
+        Dashboard["Dashboard<br/>frontend/src/app/dashboard/page.tsx"]
+        LoginPage["Login page<br/>frontend/src/app/login/page.tsx"]
+        Cron["Nightly GitHub Action<br/>scheduled-reindex.yml"]
+    end
+
+    subgraph ChatRouter["Chat endpoints — api/chat.py — prefix /api/rag/chat"]
+        Stream["POST /stream<br/>ask a question, answer<br/>streams in live (what the UI uses)"]
+        Complete["POST /complete<br/>ask a question, wait for<br/>the full answer at once<br/>(exists, but the UI uses /stream instead)"]
+        Retrieve["GET /_retrieve<br/>debug: run the search only,<br/>skip the AI answer"]
+        Feedback["POST /feedback<br/>thumbs up/down on<br/>a past answer"]
+        Status["GET /status<br/>is the LLM/retrieval<br/>configured? (local check only)"]
+        IdxStatus["GET /index/status<br/>how fresh is the<br/>search index? (reads a file)"]
+    end
+
+    subgraph MetricsRouter["Metrics endpoint — api/admin_metrics.py — prefix /api/rag/admin"]
+        Metrics["GET /metrics<br/>dashboard numbers: latency,<br/>fallback rate, top cited docs"]
+    end
+
+    subgraph ReindexRouter["Reindex endpoints — api/discovery.py — prefix /api/rag/admin"]
+        Reindex["POST /reindex<br/>rescan Drive, rebuild<br/>the whole search index"]
+        ReindexStatus["GET /reindex/status<br/>poll: is that<br/>reindex done yet?"]
+    end
+
+    subgraph PlainRoutes["Plain routes — main.py — no prefix"]
+        Root["GET /<br/>landing redirect / small message"]
+        Health["GET /healthz<br/>is the server alive at all?"]
+        ApiStatus["GET /api/status<br/>overall status, no<br/>external calls made"]
+    end
+
+    subgraph Systems["What the handlers actually touch"]
+        PrimaryIdx[("Primary Index<br/>local JSON file")]
+        Supa[("Supabase / pgvector")]
+        LLM["LLM provider<br/>Gemini / OpenAI"]
+        Drive[("Google Drive")]
+        SupaAuth["Supabase Auth"]
+    end
+
+    ChatUI --> Stream
+    ChatUI --> Feedback
+    ChatUI --> Status
+    ChatUI --> IdxStatus
+    LoginPage --> SupaAuth
+    Dashboard --> Metrics
+    Dashboard --> Reindex
+    Dashboard --> ReindexStatus
+    Cron --> Reindex
+    Cron --> ReindexStatus
+
+    Stream --> PrimaryIdx
+    Stream -.->|"weak result"| Supa
+    Stream --> LLM
+    Stream --> Supa
+    Complete --> PrimaryIdx
+    Complete -.->|"weak result"| Supa
+    Complete --> LLM
+    Complete --> Supa
+    Retrieve --> PrimaryIdx
+    Retrieve -.->|"weak result"| Supa
+    Feedback --> Supa
+    IdxStatus --> PrimaryIdx
+
+    Metrics --> Supa
+
+    Reindex --> Drive
+    Reindex --> PrimaryIdx
+    Reindex --> Supa
+    ReindexStatus -.-> Reindex
+    ApiStatus --> PrimaryIdx
+
+    Legend["Legend:<br/>solid arrow = always happens<br/>dashed arrow = only in that case<br/>(low confidence, or polling)"]
+
+    style Systems fill:#f8fafc,stroke:#94a3b8
+    style Legend fill:#eef2ff,stroke:#6366f1,stroke-dasharray: 3 3
