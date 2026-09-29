@@ -515,12 +515,22 @@ export default function Page() {
       return;
     }
     let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setSession(data.session);
-      setAuthChecked(true);
-      if (!data.session) router.replace("/login");
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return;
+        setSession(data.session);
+        setAuthChecked(true);
+        if (!data.session) router.replace("/login");
+      })
+      .catch(() => {
+        // If getSession() itself rejects (network blip, storage blocked,
+        // bad key), still flip authChecked so the UI doesn't hang on
+        // "Checking session…" forever — treat it like no session.
+        if (!mounted) return;
+        setAuthChecked(true);
+        router.replace("/login");
+      });
     const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => {
       setSession(s);
       if (!s) router.replace("/login");

@@ -272,12 +272,21 @@ export default function DashboardPage() {
       return;
     }
     let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setSession(data.session);
-      setAuthChecked(true);
-      if (!data.session) router.replace("/login");
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return;
+        setSession(data.session);
+        setAuthChecked(true);
+        if (!data.session) router.replace("/login");
+      })
+      .catch(() => {
+        // Same fallback as page.tsx — never leave "Checking session…"
+        // stuck if getSession() itself rejects.
+        if (!mounted) return;
+        setAuthChecked(true);
+        router.replace("/login");
+      });
     return () => {
       mounted = false;
     };
