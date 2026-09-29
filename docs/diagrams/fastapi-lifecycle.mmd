@@ -1,0 +1,41 @@
+flowchart TB
+    subgraph Startup["Startup — runs once, when the server process boots"]
+        direction TB
+        S1["uvicorn loads main.py"]
+        S2["load_dotenv() — read .env into the process"]
+        S3["create_app() builds the FastAPI object,<br/>and registers lifespan() to run around it"]
+        S4["register: rate limiter, CORS,<br/>static files, then the 3 routers<br/>(chat, admin_metrics, discovery)"]
+        S5["app object is now fully built<br/>— this is what uvicorn actually serves"]
+        S6["lifespan() startup half runs:<br/>local search index present?"]
+        S7{"index found<br/>on disk?"}
+        S8["nothing to do — use it"]
+        S9["hydrate_index_from_supabase()<br/>rebuild it from the backup copy"]
+        S10(["server now accepting requests"])
+
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7
+        S7 -- yes --> S8 --> S10
+        S7 -- no --> S9 --> S10
+    end
+
+    subgraph PerRequest["Per request — runs on every single call"]
+        direction TB
+        R1(["HTTP request arrives"])
+        R2["CORSMiddleware<br/>(added last, so it runs first)<br/>checks the Origin header"]
+        R3["SlowAPIMiddleware<br/>checks the per-IP rate limit"]
+        R4{"over the limit?"}
+        R5["429 Too Many Requests<br/>— handler never runs"]
+        R6["FastAPI matches the URL path<br/>to a router + route function"]
+        R7["run that route's Depends(...)<br/>e.g. get_current_user_optional(),<br/>require_roles([...])"]
+        R8{"dependency raised<br/>401 / 403?"}
+        R9["error response<br/>— handler never runs"]
+        R10["the actual route function runs<br/>(e.g. chat_stream(), get_metrics())"]
+        R11(["response sent back through<br/>the same middleware, to the client"])
+
+        R1 --> R2 --> R3 --> R4
+        R4 -- yes --> R5
+        R4 -- no --> R6 --> R7 --> R8
+        R8 -- yes --> R9
+        R8 -- no --> R10 --> R11
+    end
+
+    Startup -.->|"once startup finishes,<br/>every later call is a Per-request pass"| PerRequest

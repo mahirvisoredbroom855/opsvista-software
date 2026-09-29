@@ -33,3 +33,8 @@ on GitHub itself).
   each chunk into numbers, and write the result to both the primary index
   and the Supabase backup — the same pipeline whether it's triggered by the
   nightly cron job or the dashboard's "Reindex now" button.
+- **`fastapi-lifecycle.mmd`** — how FastAPI itself runs this app, in two
+  halves: what happens once when the server process boots (`create_app()`,
+  registering middleware/routers, the startup index check), and what
+  happens on every single request afterward (rate limiter → CORS → route
+  matching → auth dependencies → the actual handler function).
