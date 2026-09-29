@@ -4,7 +4,7 @@
 
 ![OpsVista](https://img.shields.io/badge/OpsVista-Enterprise%20RAG%20Knowledge%20Assistant-f59e0b?style=for-the-badge)
 
-**Ask questions about your company's own documents in plain English. Get grounded, cited answers — not guesses.**
+**Ask questions about your company's own documents in plain English. Get grounded, cited answers.**
 
 Internal knowledge assistant for **Precision Textile Industry LTD (PTIL)**, built end-to-end: dual-path retrieval, real-time streaming, observability dashboard, scheduled reindexing, and role-based access control.
 
