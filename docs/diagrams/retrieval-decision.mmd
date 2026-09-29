@@ -1,0 +1,25 @@
+flowchart TD
+    Start(["Question arrives"]) --> Search["Search the primary index<br/>(local JSON, in-memory)"]
+    Search --> Found{"Any results?"}
+
+    Found -- "no" --> Fallback
+    Found -- "yes" --> Score["Take the single best<br/>match's score = confidence"]
+
+    Score --> Gate{"confidence ≥ 0.5 ?<br/>(RAG_QUALITY_THRESHOLD)"}
+
+    Gate -- "yes, confident" --> UsePrimary["Use the primary index's results<br/>used_fallback = false"]
+
+    Gate -- "no, weak result" --> Fallback["Try the pgvector fallback<br/>(Supabase backup search)"]
+
+    Fallback --> PgFound{"pgvector configured,<br/>and found something?"}
+
+    PgFound -- "yes" --> UseFallback["Replace results with pgvector's<br/>used_fallback = true<br/>fallback_reason recorded"]
+
+    PgFound -- "no — not configured,<br/>errored, or also empty" --> KeepWeak["Keep the original weak/empty result<br/>something beats nothing"]
+
+    UsePrimary --> Done(["Send to the LLM to write the answer"])
+    UseFallback --> Done
+    KeepWeak --> Done
+
+    style Gate fill:#fef3c7,stroke:#d97706
+    style PgFound fill:#fef3c7,stroke:#d97706

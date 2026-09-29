@@ -1,0 +1,29 @@
+flowchart LR
+    Drive[("Google Drive<br/>department folders")]
+
+    subgraph Discover["1 — Discover"]
+        Find["find each department's folder<br/>list every file inside it"]
+    end
+
+    subgraph Extract["2 — Extract + chunk"]
+        Pull["download each file's raw content"]
+        Chunk["extract text (PDF / DOCX / XLSX / TXT)<br/>split into ~900-char chunks,<br/>never mid-paragraph"]
+    end
+
+    subgraph Embed["3 — Embed"]
+        Vec["turn each chunk into a list of<br/>numbers (an embedding)"]
+    end
+
+    subgraph Write["4 — Write"]
+        Local[("Local JSON index<br/>(primary search)")]
+        Supa[("Supabase / pgvector<br/>(backup search)")]
+    end
+
+    Drive --> Find --> Pull --> Chunk --> Vec
+    Vec --> Local
+    Vec --> Supa
+
+    Note["Runs nightly by cron, or manually<br/>via the dashboard's 'Reindex now' button —<br/>both trigger the exact same code"]
+    Write -.-> Note
+
+    style Note fill:#eef2ff,stroke:#6366f1,stroke-dasharray: 3 3

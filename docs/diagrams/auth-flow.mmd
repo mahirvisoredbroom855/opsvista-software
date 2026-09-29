@@ -1,0 +1,40 @@
+sequenceDiagram
+    autonumber
+    actor Person
+    participant UI as Login page (login/page.tsx)
+    participant SB as Supabase Auth
+    participant API as Backend API
+    participant Dep as auth_deps.py
+
+    Person->>UI: enters email + password, clicks "Sign in"
+    UI->>SB: supabase.auth.signInWithPassword()
+    SB-->>UI: access token (JWT)
+    Note over UI: token saved in the browser<br/>(persistSession: true) — survives a page reload
+    UI->>Person: redirected into the app
+
+    Note over Person,API: later — Person asks a chat question or opens the dashboard
+
+    UI->>API: request with header<br/>Authorization: Bearer &lt;token&gt;
+    API->>Dep: get_current_user_optional()
+    Dep->>SB: verify_supabase_token(token)<br/>client.auth.get_user(token)
+    SB-->>Dep: user record, or an error
+
+    alt token valid
+        Dep-->>API: user dict {id, email, app_metadata.role}
+    else missing / expired / invalid / Supabase unreachable
+        Dep-->>API: None — never raises, request still proceeds
+    end
+
+    alt route only needs "is someone logged in?" (chat)
+        API->>API: proceed either way — anonymous chat is allowed
+    else route needs a specific role (admin dashboard, reindex)
+        API->>Dep: require_roles(["Owner","Admin"])
+        Dep->>Dep: read role from user.app_metadata.role
+        alt role missing or not allowed
+            Dep-->>API: 403 Forbidden
+        else role allowed
+            Dep-->>API: user dict — request proceeds
+        end
+    end
+
+    Note over API,Dep: one more path exists for the nightly cron job:<br/>require_roles_or_automation_token() accepts a secret<br/>X-Automation-Token header instead of a login, since<br/>a scheduled job has no human session to present
